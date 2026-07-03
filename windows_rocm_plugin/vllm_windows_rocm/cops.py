@@ -373,6 +373,10 @@ _FLASH_ARGN = ["q", "k", "v", "out", "cu_seqlens_q", "max_seqlen_q", "seqused_k"
                "softmax_scale", "causal", "window_size", "block_table", "softcap",
                "q_descale", "k_descale", "v_descale"]
 
+_CK_VARLEN = [None]   # loaded ck_fmha_varlen_C module
+_CK_CALLS = [0]       # count of forward() calls routed to CK (diagnostics)
+_CK_DBG = [0]         # one-shot reject-reason prints under VLLM_WIN_CK_DEBUG=1
+
 
 def maybe_patch_flash_decode() -> None:
     """FLASH-KERNEL path (the real one): keep TRITON_ATTN's light fused path (rope+KV-write, metadata)
@@ -431,6 +435,108 @@ def maybe_patch_flash_decode() -> None:
     if _ta is not None and hasattr(_ta, "unified_attention"):
         _ta.unified_attention = _wrap
     print("vllm-win: flash decode patched into unified_attention (head 128/256, pure decode)")
+
+
+def maybe_patch_ck_prefill() -> None:
+    """CK ck_tile FMHA-varlen for PURE PREFILL -- the prefill/TTFT lever (compute-bound WMMA, the one axis
+    RDNA3 single-stream decode can't move). Patches TritonAttentionImpl.forward: when the batch is a pure
+    prefill with NO prior KV context (per-seq seq_len == query_len), head_size 128, decoder self-attn, no
+    sliding-window/softcap/alibi/sinks, and fp16/bf16 -- routes the attention COMPUTE to the CK varlen
+    kernel on the CONTIGUOUS key/value (reshape_and_cache runs in its own method, so the decode KV cache is
+    unaffected and correct). Decode, mixed prefill+decode, sliding-window, head!=128, and any prior-context
+    step all fall through to the stock unified_attention. Opt-in VLLM_WIN_CK_PREFILL=1; call AFTER
+    `from vllm import LLM`, BEFORE LLM(...). See memory ck-fmha-gfx1100-windows."""
+    if os.environ.get("VLLM_WIN_CK_PREFILL", "0") != "1":
+        return
+    if _CK_VARLEN[0] is None:
+        d = os.environ.get("VLLM_WIN_CKVARLEN_DIR", r"C:\vw_ckvarlen_build")
+        for hp in (r"C:\HIP-SDK\bin", r"C:\HIP-SDK\lib", d):
+            try:
+                os.add_dll_directory(hp)
+            except Exception:  # noqa: BLE001
+                pass
+        if d not in sys.path:
+            sys.path.insert(0, d)
+        try:
+            import ck_fmha_varlen_C as _ckmod
+            _CK_VARLEN[0] = _ckmod
+            print("vllm-win: loaded CK varlen FMHA from", d)
+        except Exception as e:  # noqa: BLE001
+            print("vllm-win CK prefill patch skipped (import failed):", repr(e))
+            return
+    try:
+        import vllm.v1.attention.backends.triton_attn as _mod
+        _Impl = _mod.TritonAttentionImpl
+    except Exception as e:  # noqa: BLE001
+        print("vllm-win CK prefill patch skipped (import failed):", repr(e))
+        return
+    if getattr(_Impl.forward, "_ck_wrapped", False):
+        return
+    _orig = _Impl.forward
+    _ck = _CK_VARLEN[0]
+
+    def _forward(self, layer, query, key, value, kv_cache, attn_metadata,
+                 output=None, output_scale=None, output_block_scale=None):
+        m = attn_metadata
+        try:
+            ok = (m is not None and output is not None and key is not None and value is not None
+                  and kv_cache is not None and output_scale is None
+                  and getattr(m, "use_cascade", False) is False
+                  and getattr(m, "max_query_len", 0) and m.max_query_len > 1
+                  and m.max_query_len == getattr(m, "max_seq_len", -1)
+                  and getattr(self, "sliding_window", (-1, -1)) == (-1, -1)
+                  and not getattr(self, "logits_soft_cap", 0)
+                  and getattr(self, "alibi_slopes", None) is None
+                  and getattr(self, "sinks", None) is None
+                  and query.dim() == 3 and query.shape[2] == 128
+                  and query.dtype in (torch.float16, torch.bfloat16)
+                  and not self.kv_cache_dtype.startswith("fp8"))
+        except Exception:  # noqa: BLE001
+            ok = False
+        if (os.environ.get("VLLM_WIN_CK_DEBUG") == "1" and _CK_DBG[0] < 8
+                and m is not None and getattr(m, "max_query_len", None) and m.max_query_len > 1):
+            _CK_DBG[0] += 1
+            try:
+                print("vllm-win CK-call:", type(self).__name__, "ok=", ok,
+                      "out_none=", output is None, "oscale=", (output_scale is not None), dict(
+                    mq=getattr(m, "max_query_len", None), ms=getattr(m, "max_seq_len", None),
+                    cascade=getattr(m, "use_cascade", None), sw=getattr(self, "sliding_window", None),
+                    softcap=getattr(self, "logits_soft_cap", None),
+                    alibi=(getattr(self, "alibi_slopes", None) is not None),
+                    sinks=(getattr(self, "sinks", None) is not None),
+                    out_scale=(output_scale is not None),
+                    head=(query.shape[2] if query.dim() == 3 else query.shape),
+                    dt=str(query.dtype), kv=getattr(self, "kv_cache_dtype", None)))
+            except Exception:  # noqa: BLE001
+                pass
+        if ok:
+            n = m.num_actual_tokens
+            cu = m.query_start_loc
+            nreq = int(cu.shape[0]) - 1
+            # pure-prefill-no-context proof: single req w/ query_len==seq_len is guaranteed (no sync);
+            # multi-req -> one GPU verify (prefill step only, off the decode hot path).
+            safe = (nreq == 1)
+            if not safe and nreq >= 1:
+                qlens = cu[1:nreq + 1] - cu[:nreq]
+                safe = bool((m.seq_lens[:nreq] == qlens).all().item())
+            if safe:
+                # k/v come from a fused-QKV split (GQA) -> often non-contiguous; enforce thd contiguity
+                # (a small [tokens,H,D] copy, negligible vs the O(S^2) attention it feeds).
+                q = query[:n].contiguous(); k = key[:n].contiguous(); v = value[:n].contiguous()
+                Hq = q.shape[1]; D = q.shape[2]
+                o_ck = torch.empty_like(q)                      # contiguous [n, Hq, D]
+                cuq = cu if cu.dtype == torch.int32 else cu.to(torch.int32)
+                _ck.ck_fmha_varlen(q, k, v, o_ck, cuq, cuq,
+                                   int(m.max_query_len), int(m.max_seq_len), float(self.scale), True)
+                output[:n].copy_(o_ck.reshape(output[:n].shape))
+                _CK_CALLS[0] += 1
+                return output
+        return _orig(self, layer, query, key, value, kv_cache, attn_metadata,
+                     output, output_scale, output_block_scale)
+
+    _forward._ck_wrapped = True
+    _Impl.forward = _forward
+    print("vllm-win: CK varlen FMHA patched into TritonAttentionImpl.forward (pure prefill, head 128, fp16/bf16)")
 
 
 def install() -> None:

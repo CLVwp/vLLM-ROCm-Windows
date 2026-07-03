@@ -133,6 +133,34 @@ tile is ~20x off memory bandwidth for a single decode row. The GEMV is a true re
 (M>1) back to `conch`; it is `@triton.autotune`d per shape (BLOCK_N/num_warps). On
 `casperhansen/deepseek-r1-distill-qwen-14b-awq` it takes decode from 12.2 to 50.9 tok/s.
 
+### CK ck_tile FMHA (WMMA) for prefill
+
+`experiments/ck_fmha/` builds a native **Composable Kernel `ck_tile` flash-attention** (forward, d128,
+fp16 + bf16, causal + GQA, varlen/group-mode) for gfx1100 -- the RDNA3 WMMA attention path that AITER's
+Windows gate (`ENABLE_CK=False`) hides but that CK itself supports. It compiles with hipcc + MSVC after a
+one-line device-code patch (`std::memcpy` -> `__builtin_memcpy`). Isolated, it runs prefill attention at
+~37 TFLOP/s vs ~11 for Triton `unified_attention` (~3.3x).
+
+Wired into vLLM prefill via `VLLM_WIN_CK_PREFILL=1` (`cops.maybe_patch_ck_prefill`, opt-in): pure-prefill
+batches with no prior KV context (head 128, no sliding-window / softcap / alibi) route their attention to
+the CK varlen kernel; decode, mixed prefill+decode, and sliding-window steps fall through to Triton. The
+KV-cache write is a separate step, so decode is untouched. This is a **prefill / TTFT** lever
+(compute-bound WMMA), not a single-stream decode one, so the end-to-end win grows with context as the
+O(S^2) attention fraction rises. On `ERNIE-4.5-21B-A3B` (bf16, clean paired runs, best-of-3 TTFT):
+
+| prompt tokens | Triton | CK | TTFT speedup |
+|---|---|---|---|
+| 2059 | 415.7 ms | 381.9 ms | 1.09x |
+| 4099 | 850.2 ms | 733.9 ms | 1.16x |
+| 6156 | 1379.7 ms | 1113.5 ms | 1.24x |
+| 8196 | 1990.6 ms | 1519.0 ms | 1.31x |
+| 10253 | 2681.7 ms | 1935.9 ms | 1.39x |
+
+At short prompts (~1k) the win is only ~1.03x -- attention is a small slice of the prefill step (QKV/O
+projection + MoE) -- and the curve is still climbing at 10k. bf16 output differs slightly from Triton
+(kernel numerics), which can flip greedy tokens. Correctness gate: rel ~1e-4 (fp16) / ~3e-3 (bf16) vs
+`scaled_dot_product_attention` across causal, GQA, and multi-sequence varlen.
+
 ## Setup
 
 ```bat
