@@ -28,7 +28,7 @@ if FLASH:
 import torch
 from vllm import LLM, SamplingParams
 
-MODEL = "cyankiwi/ERNIE-4.5-21B-A3B-Thinking-AWQ-4bit"
+MODEL = os.environ.get("G_MODEL", "cyankiwi/ERNIE-4.5-21B-A3B-Thinking-AWQ-4bit")
 MAXLEN = int(os.environ.get("G_MAXLEN", "4096"))
 GPUUTIL = float(os.environ.get("G_GPUUTIL", "0.85"))
 CG = os.environ.get("G_CUDAGRAPH", "1") == "1"
@@ -48,14 +48,21 @@ if FLASH:
         print("flash patch failed:", repr(e))
 
 free0, total = torch.cuda.mem_get_info()
+KVDTYPE = os.environ.get("G_KVDTYPE", "auto")
 BACKEND = "ROCM_ATTN" if ROUTE else "TRITON_ATTN"
-print(f"== ERNIE | S5_ROUTE={ROUTE} FLASH={FLASH} OPT={OPT} backend={BACKEND} cg={CG} | free {free0/GIB:.1f}/{total/GIB:.1f} GiB maxlen={MAXLEN} util={GPUUTIL}")
 extra = (dict(enforce_eager=False, compilation_config={"mode": 0, "cudagraph_mode": "FULL_DECODE_ONLY"})
          if CG else dict(enforce_eager=True))
+if KVDTYPE.startswith("kvarn_"):
+    BACKEND = None  # per-layer backend selection: KVARN for the quantized layers
+    extra["block_size"] = int(os.environ.get("G_BLOCKSIZE", "128"))
+_nb = os.environ.get("G_NUMBLOCKS")
+if _nb:
+    extra["num_gpu_blocks_override"] = int(_nb)  # cap KV blocks (bypass KVarN's buggy profiled sizing)
+print(f"== ERNIE | S5={ROUTE} FLASH={FLASH} OPT={OPT} kv={KVDTYPE} backend={BACKEND} cg={CG} | free {free0/GIB:.1f}/{total/GIB:.1f} GiB maxlen={MAXLEN} util={GPUUTIL}")
 t0 = time.perf_counter()
-llm = LLM(model=MODEL, dtype="bfloat16", attention_backend=BACKEND,
+llm = LLM(model=MODEL, dtype=os.environ.get("G_DTYPE", "bfloat16"), attention_backend=BACKEND,
     tensor_parallel_size=1, gpu_memory_utilization=GPUUTIL, max_model_len=MAXLEN,
-    kv_cache_dtype="auto", trust_remote_code=False, **extra)  # vLLM native ernie45_moe.py (config auto_map .py not downloaded)
+    kv_cache_dtype=KVDTYPE, trust_remote_code=False, **extra)  # vLLM native ernie45_moe.py (config auto_map .py not downloaded)
 print(f"engine init: {time.perf_counter()-t0:.1f}s")
 free1, _ = torch.cuda.mem_get_info()
 print(f"VRAM used after init: {(total-free1)/GIB:.2f} GiB | FREE {free1/GIB:.2f} GiB  (>2 GiB free => no spill)")

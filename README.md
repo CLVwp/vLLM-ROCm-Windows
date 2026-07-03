@@ -21,18 +21,24 @@ Experimental, but past "it just runs". What currently works on the test machine:
 - **torch.compile / inductor works** (CompilationMode.STOCK_TORCH_COMPILE), and **hipGraph
   decode capture works** (`cudagraph_mode=FULL_DECODE_ONLY`).
 - **fp8 KV cache** works (Triton path), ~2x KV-cache capacity / context length.
+- **KVarN KV-cache quantization** (calibration-free Hadamard + Sinkhorn + asymmetric RTN, K 4-bit /
+  V 2-bit; Huawei's method, Triton kernels ported to gfx1100) runs end-to-end and gives **~4.7x KV
+  capacity** at ~fp16 accuracy (demonstrated on Qwen2.5-7B: 999k vs 210k KV tokens, coherent). **WIP:**
+  its per-forward workspace over-allocates (~5 GiB), so today it only fits models that leave enough
+  headroom (7-9B), and it is ~35% slower — a capacity feature, not a speed one. Not finished; the
+  builder memory refactor is pending.
 
 ### Performance (measured)
 
 Single-stream decode (batch 1, greedy) on the test machine. Output was verified coherent for
 each model. All weights are 4-bit; KV cache fp16 unless noted.
 
-| Model | Quantization | decode (tok/s) | notes |
-| --- | --- | --- | --- |
-| `Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4` (dense, 7B) | GPTQ Int4 | **115** | native exllama GEMM + hipGraph decode, `gpu_memory_utilization=0.9` (spill-verified clean) |
-| `cyankiwi/ERNIE-4.5-21B-A3B-Thinking-AWQ-4bit` (**MoE**, 21B / A3B active, head 128) | compressed-tensors W4A16 gs32 | 62.7 → **79.2** | stock → +M=1 MoE-decode gather-GEMV + native `wvSplitK` dense. Fits 20GB with ~3 GiB free — spill-free |
-| `sahilchachra/Qwythos-9B-Claude-Mythos-5-1M-AWQ` (Qwen3.5 hybrid, 9B) | compressed-tensors W4A16 | **61.7** | native exllama + hipGraph, **`gpu_memory_utilization=0.7`** (see note) |
-| `casperhansen/deepseek-r1-distill-qwen-14b-awq` (dense, 14B) | AWQ Int4 | **50.3** | custom M=1 W4 GEMV, autotuned, util 0.9 (spill-verified clean) |
+| Model | Quantization | decode (tok/s) | KVarN KV-quant (WIP) | notes |
+| --- | --- | --- | --- | --- |
+| `Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4` (dense, 7B) | GPTQ Int4 | **115** | **4.74x KV** (999k vs 210k tok), 74.7 tok/s, coherent | native exllama GEMM + hipGraph decode, `gpu_memory_utilization=0.9` (spill-verified clean) |
+| `cyankiwi/ERNIE-4.5-21B-A3B-Thinking-AWQ-4bit` (**MoE**, 21B / A3B active, head 128) | compressed-tensors W4A16 gs32 | 62.7 → **79.2** | — (14GB weights leave no room for the ~5 GiB KVarN workspace) | stock → +M=1 MoE-decode gather-GEMV + native `wvSplitK` dense. Fits 20GB with ~3 GiB free — spill-free |
+| `sahilchachra/Qwythos-9B-Claude-Mythos-5-1M-AWQ` (Qwen3.5 hybrid, 9B) | compressed-tensors W4A16 | **61.7** | — | native exllama + hipGraph, **`gpu_memory_utilization=0.7`** (see note) |
+| `casperhansen/deepseek-r1-distill-qwen-14b-awq` (dense, 14B) | AWQ Int4 | **50.3** | — | custom M=1 W4 GEMV, autotuned, util 0.9 (spill-verified clean) |
 
 Numbers re-measured 2026-07-02, cudagraph (`FULL_DECODE_ONLY`) decode, and **verified spill-free** by
 polling the Windows GPU shared-memory counter during the run (peak shared == the ~0.76 GiB desktop
@@ -47,6 +53,16 @@ number (that was the old 39.9). At `util=0.7` it runs entirely in dedicated VRAM
 clean and faster (61.7). The 26B-class MoEs (gemma-4, 17GB weights) overfill 20GB at any workable util, so
 ERNIE-4.5-21B is used as the clean MoE bench. Aggregate throughput scales with concurrency (Qwen2.5-7B,
 greedy): ~73 tok/s at batch 4, ~232 at batch 16, ~358 at batch 32.
+
+**KVarN (experimental / WIP).** `--kv-cache-dtype kvarn_k4v2_g128 --block-size 128` runs end-to-end on
+gfx1100 (K 4-bit / V 2-bit, calibration-free). On Qwen2.5-7B, vLLM sizes **999,296 KV tokens vs 210,784
+in fp16 — 4.74x capacity** — and generation stays coherent, at 74.7 tok/s (~35% slower than the fp16
+115: KVarN is a KV-*capacity* feature, not a speed one). Two rough edges remain (hence WIP): (1) vLLM
+sizes the KV pool to fill the budget, so cap it with `num_gpu_blocks_override` (else it tries to allocate
+all ~1M tokens at once and spills); (2) KVarN's per-forward workspace over-allocates ~5 GiB (Sinkhorn /
+rotation / D2H staging, not counted by `gpu_memory_utilization`), so today it only fits models that leave
+that headroom (7-9B) — a 14GB-weight model like ERNIE has no room. The pending builder memory refactor
+would remove both.
 
 Decode is still below the card's ~800 GB/s memory-bandwidth roofline; per-shape GEMV tuning,
 fp8-KV scale calibration, and porting the rest of the `csrc` kernels are ongoing.
