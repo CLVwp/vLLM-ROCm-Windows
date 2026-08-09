@@ -1,11 +1,15 @@
 """Flash-layout decode kernel: correctness vs fp32 reference (incl. sliding) + timing.
 Cache is TRITON_ATTN's flash layout kc/vc [num_blocks, block_size, num_kv_heads, head_size]."""
-import os, math, time
-for _d in (r"C:\HIP-SDK\bin", r"C:\HIP-SDK\lib", r"C:\vw_attnflash_build"):
-    try: os.add_dll_directory(_d)
-    except Exception: pass
+import os, sys, math, time
+_D = os.path.dirname(os.path.abspath(__file__))
+while _D != os.path.dirname(_D) and not os.path.isfile(os.path.join(_D, "tools", "winrocm_paths.py")):
+    _D = os.path.dirname(_D)
+sys.path.insert(0, os.path.join(_D, "tools"))
+import winrocm_paths as wp
+_FLASH_DIR = wp.build_dir("vw_attnflash_build", "VLLM_WIN_FLASH_DIR")   # .pyd from build_attn_flash_c.py
+wp.add_dll_dirs(_FLASH_DIR)
 import torch
-torch.ops.load_library(r"C:\vw_attnflash_build\vllm_win_attn_flash_C.pyd")
+torch.ops.load_library(os.path.join(_FLASH_DIR, "vllm_win_attn_flash_C.pyd"))
 assert hasattr(torch.ops._C, "paged_attention_flash")
 print("flash pyd loaded")
 

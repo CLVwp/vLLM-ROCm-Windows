@@ -1,12 +1,16 @@
 """S5 microbench PART A: native _C.paged_attention_v1 alone (no vllm import -> no _C namespace conflict).
 gemma sliding-layer decode: 1 query token, head_size 256, 16 q / 8 kv heads, context SEQ, block_size 16.
 Native v0 paged KV layout. Prints us/call for varying context."""
-import os, time
-for _d in (r"C:\HIP-SDK\bin", r"C:\HIP-SDK\lib", r"C:\vw_attn_build"):
-    try: os.add_dll_directory(_d)
-    except Exception: pass
+import os, sys, time
+_D = os.path.dirname(os.path.abspath(__file__))
+while _D != os.path.dirname(_D) and not os.path.isfile(os.path.join(_D, "tools", "winrocm_paths.py")):
+    _D = os.path.dirname(_D)
+sys.path.insert(0, os.path.join(_D, "tools"))
+import winrocm_paths as wp
+_ATTN_DIR = wp.build_dir("vw_attn_build", "VLLM_WIN_ATTN_DIR")   # .pyd from build_attn_c.py
+wp.add_dll_dirs(_ATTN_DIR)
 import torch
-torch.ops.load_library(r"C:\vw_attn_build\vllm_win_attn_C.pyd")
+torch.ops.load_library(os.path.join(_ATTN_DIR, "vllm_win_attn_C.pyd"))
 assert hasattr(torch.ops._C, "paged_attention_v1"), "no paged_attention_v1"
 print("native pyd loaded")
 

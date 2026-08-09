@@ -6,15 +6,18 @@ the kernel ran with max_err 0.0.
 
 Run from an environment where MSVC cl/link are on PATH (call vcvars64.bat first), e.g.:
 
-    cmd /c "\"E:\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat\" ^
-        && set ROCM_HOME=C:\\HIP-SDK ^
-        && set HIP_PATH=C:\\HIP-SDK ^
-        && set ROCM_PATH=C:\\HIP-SDK ^
+    cmd /c "\"..\\..\\tools\\winrocm_env.bat\" ^
         && python build_and_test.py"
 """
 import os
 import sys
 import time
+
+_D = os.path.dirname(os.path.abspath(__file__))
+while _D != os.path.dirname(_D) and not os.path.isfile(os.path.join(_D, "tools", "winrocm_paths.py")):
+    _D = os.path.dirname(_D)
+sys.path.insert(0, os.path.join(_D, "tools"))
+import winrocm_paths as wp
 
 import torch
 from torch.utils import cpp_extension
@@ -44,9 +47,8 @@ _hp.hipify = _hipify_no_none
 # ------------------------------------------------------------------------------
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BUILD_DIR = r"C:\vw_p0build"  # short path avoids Windows long-path build issues
-DEVICE_LIB = r"C:\HIP-SDK\lib\llvm\amdgcn\bitcode"  # HIP SDK 7.2 device bitcode location
-os.makedirs(BUILD_DIR, exist_ok=True)
+BUILD_DIR = wp.build_dir("vw_p0build", clean=True)  # short path avoids Windows long-path build issues
+DEVICE_LIB = wp.device_lib()  # HIP SDK device bitcode location
 
 print("=== env ===")
 print("torch", torch.__version__, "hip", torch.version.hip)

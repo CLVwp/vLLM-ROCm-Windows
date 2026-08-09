@@ -1,13 +1,18 @@
 """Phase-0+ kernel hardening: build & validate real HIP kernels on gfx1100.
 
 Run with MSVC env active (see experiments/phase0_hip_ext/README.md), e.g.:
-    cmd /c "\"E:\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat\" ^
-        && set ROCM_HOME=C:\\HIP-SDK && set HIP_PATH=C:\\HIP-SDK && set ROCM_PATH=C:\\HIP-SDK ^
+    cmd /c "\"..\\..\\tools\\winrocm_env.bat\" ^
         && python build_and_test.py"
 """
 import os
 import sys
 import time
+
+_D = os.path.dirname(os.path.abspath(__file__))
+while _D != os.path.dirname(_D) and not os.path.isfile(os.path.join(_D, "tools", "winrocm_paths.py")):
+    _D = os.path.dirname(_D)
+sys.path.insert(0, os.path.join(_D, "tools"))
+import winrocm_paths as wp
 
 import torch
 from torch.utils import cpp_extension
@@ -32,9 +37,8 @@ def _hipify_no_none(*a, **k):
 _hp.hipify = _hipify_no_none
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BUILD_DIR = r"C:\vw_p0kbuild"
-DEVICE_LIB = r"C:\HIP-SDK\lib\llvm\amdgcn\bitcode"
-os.makedirs(BUILD_DIR, exist_ok=True)
+BUILD_DIR = wp.build_dir("vw_p0kbuild", clean=True)
+DEVICE_LIB = wp.device_lib()
 
 print("torch", torch.__version__, "hip", torch.version.hip)
 sys.stdout.flush()

@@ -2,12 +2,16 @@
 (a) sliding_window=0 must equal full attention (no regression).
 (b) sliding_window=W must equal a windowed reference (query at pos seq_len-1 keeps tokens with
     distance (seq_len-1 - token) < W). Also re-check perf with sw=0 vs sw=W."""
-import os, math, time
-for _d in (r"C:\HIP-SDK\bin", r"C:\HIP-SDK\lib", r"C:\vw_attn_build"):
-    try: os.add_dll_directory(_d)
-    except Exception: pass
+import os, sys, math, time
+_D = os.path.dirname(os.path.abspath(__file__))
+while _D != os.path.dirname(_D) and not os.path.isfile(os.path.join(_D, "tools", "winrocm_paths.py")):
+    _D = os.path.dirname(_D)
+sys.path.insert(0, os.path.join(_D, "tools"))
+import winrocm_paths as wp
+_ATTN_DIR = wp.build_dir("vw_attn_build", "VLLM_WIN_ATTN_DIR")   # .pyd from build_attn_c.py
+wp.add_dll_dirs(_ATTN_DIR)
 import torch
-torch.ops.load_library(r"C:\vw_attn_build\vllm_win_attn_C.pyd")
+torch.ops.load_library(os.path.join(_ATTN_DIR, "vllm_win_attn_C.pyd"))
 print("native pyd loaded")
 
 dev, dt = "cuda", torch.float16

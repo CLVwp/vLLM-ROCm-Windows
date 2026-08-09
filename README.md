@@ -184,6 +184,51 @@ cd experiments\vllm_c_ext
 build_run.bat
 ```
 
+Nothing above needs editing for a different machine: the `build_*.bat` wrappers locate MSVC (via
+`vswhere`) and the HIP SDK themselves, resolve their own location, and take the GPU architecture to
+compile for from the live device.
+
+### Optional: the CK FMHA prefill kernel
+
+Needed only for `VLLM_WIN_CK_PREFILL=1` (see [CK ck_tile FMHA](#ck-ck_tile-fmha-wmma-for-prefill)).
+Clone Composable Kernel next to this repo, generate the FMHA instances, then build:
+
+```bat
+:: from the parent directory of this repo
+git clone --depth 1 https://github.com/ROCm/composable_kernel
+
+:: one portability fix: std::memcpy is host-only in device code on Windows HIP
+:: in composable_kernel\include\ck_tile\core\arch\amd_buffer_addressing_builtins.hpp,
+:: replace std::memcpy with __builtin_memcpy (one line, around line 148)
+
+cd composable_kernel\example\ck_tile\01_fmha
+python generate.py --targets gfx11 --api fwd --receipt 0 -o ..\..\..\..\ckfmha_gen
+
+:: back in this repo
+cd experiments\ck_fmha
+build_ck_varlen.bat
+```
+
+Use `--targets gfx12` instead of `gfx11` on RDNA4. The build picks up `composable_kernel` and
+`ckfmha_gen` as siblings of this repo; point `CK_ROOT` / `CK_FMHA_GEN` elsewhere if you put them
+somewhere else.
+
+### Overriding the auto-detection
+
+Set any of these if a probe guesses wrong:
+
+| variable | what it pins | default |
+|---|---|---|
+| `HIP_PATH` | HIP SDK / ROCm install root | `C:\HIP-SDK`, else newest `C:\Program Files\AMD\ROCm\*` |
+| `VCVARS64` | MSVC `vcvars64.bat` | located via `vswhere` |
+| `VLLM_WIN_GFX_ARCH` | `--offload-arch` target | the installed GPU's arch (`gfx1100`, `gfx1200`, ...) |
+| `VLLM_WIN_BUILD_ROOT` | parent of the scratch build dirs | `C:\`, else `%LOCALAPPDATA%` |
+| `VLLM_WIN_BUILD_CLEAN=0` | keep scratch dirs (incremental rebuilds) | wipe before building |
+| `CK_ROOT` / `CK_FMHA_GEN` | Composable Kernel checkout / generated FMHA instances | a `composable_kernel` next to this repo |
+
+Resolution lives in `tools/winrocm_paths.py` (Python) and `tools/winrocm_env.bat` (the `.bat`
+wrappers). Only RDNA3 (gfx1100) is actually tested here; other targets should build but are unverified.
+
 ## Running
 
 Run from `run/` (not the repo root, so the cloned `vllm/` directory does not shadow the

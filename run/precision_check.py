@@ -5,6 +5,13 @@ Run twice with different VLLM_PC_TAG / VLLM_BENCH_KVDTYPE, then compare the save
 """
 import json
 import os
+import sys
+
+_D = os.path.dirname(os.path.abspath(__file__))
+while _D != os.path.dirname(_D) and not os.path.isfile(os.path.join(_D, "tools", "winrocm_paths.py")):
+    _D = os.path.dirname(_D)
+sys.path.insert(0, os.path.join(_D, "tools"))
+import winrocm_paths as wp  # noqa: E402
 
 os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")
 os.environ.setdefault("VLLM_ROCM_USE_SKINNY_GEMM", "0")
@@ -16,7 +23,8 @@ from vllm import LLM, SamplingParams  # noqa: E402
 MODEL = os.environ.get("VLLM_BENCH_MODEL", "sahilchachra/Qwythos-9B-Claude-Mythos-5-1M-AWQ")
 KVDTYPE = os.environ.get("VLLM_BENCH_KVDTYPE", "auto")
 TAG = os.environ.get("VLLM_PC_TAG", KVDTYPE)
-OUT = os.environ.get("VLLM_PC_OUT", r"C:\Users\filip\AppData\Local\Temp\claude\C--Users-filip-Desktop-Progetto-VLLM-ROCM-WINDOWS\0e4cae09-e6d5-4354-bd2d-2ff84001dabf\scratchpad")
+OUT = os.environ.get("VLLM_PC_OUT") or os.path.join(wp.repo_root(), "run", "precision_out")
+os.makedirs(OUT, exist_ok=True)
 
 PROMPTS = [
     "Explain how a transformer attention layer works.",

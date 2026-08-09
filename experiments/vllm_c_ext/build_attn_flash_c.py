@@ -1,7 +1,14 @@
 """Build paged_attention_flash.cu (self-contained flash-layout decode paged-attention, my own HIP -> no
 csrc hipify needed) into vllm_win_attn_flash_C.pyd -> torch.ops._C.paged_attention_flash. Same HIP recipe
 as build_attn_c.py."""
-import os, time, torch
+import os, sys, time, torch
+
+_D = os.path.dirname(os.path.abspath(__file__))
+while _D != os.path.dirname(_D) and not os.path.isfile(os.path.join(_D, "tools", "winrocm_paths.py")):
+    _D = os.path.dirname(_D)
+sys.path.insert(0, os.path.join(_D, "tools"))
+import winrocm_paths as wp
+
 from torch.utils import cpp_extension
 
 from torch.utils.hipify import hipify_python as _hp
@@ -19,9 +26,8 @@ _hp.hipify = _no_none
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SHIM = os.path.join(HERE, "shim")
-BUILD_DIR = r"C:\vw_attnflash_build"
-DEVICE_LIB = r"C:\HIP-SDK\lib\llvm\amdgcn\bitcode"
-os.makedirs(BUILD_DIR, exist_ok=True)
+BUILD_DIR = wp.build_dir("vw_attnflash_build", "VLLM_WIN_FLASH_DIR", clean=True)
+DEVICE_LIB = wp.device_lib()
 
 # CUDA->HIP header shims (ATen/cuda/CUDAContext.h etc. pull in cuda_runtime_api.h which is absent on ROCm)
 SHIMS = {
@@ -46,7 +52,7 @@ cpp_extension.load(
         "-U__HIP_NO_HALF_CONVERSIONS__", "-U__HIP_NO_HALF_OPERATORS__",
         "-DTORCH_HIP_VERSION=0", "-DUSE_ROCM=1", "-O3", f"-I{SHIM}",
     ],
-    extra_ldflags=["/LIBPATH:C:\\HIP-SDK\\lib", "amdhip64.lib"],
+    extra_ldflags=["/LIBPATH:" + wp.hip_lib(), "amdhip64.lib"],
     verbose=True,
 )
 print("BUILD_OK in", round(time.perf_counter() - t0, 1), "s")

@@ -9,6 +9,12 @@ import shutil
 import sys
 import time
 
+_D = os.path.dirname(os.path.abspath(__file__))
+while _D != os.path.dirname(_D) and not os.path.isfile(os.path.join(_D, "tools", "winrocm_paths.py")):
+    _D = os.path.dirname(_D)
+sys.path.insert(0, os.path.join(_D, "tools"))
+import winrocm_paths as wp
+
 import torch
 from torch.utils import cpp_extension
 
@@ -25,13 +31,12 @@ def _no_none(*a, **k):
     return r
 _hp.hipify = _no_none
 
-VLLM_CSRC = r"C:\Users\filip\Desktop\Progetto_VLLM_ROCM_WINDOWS\vllm\csrc"
+VLLM_CSRC = wp.vllm_csrc()
 HERE = os.path.dirname(os.path.abspath(__file__))
 SHIM = os.path.join(HERE, "shim")
-HIPDIR = r"C:\vw_moe_hip"
-BUILD_DIR = r"C:\vw_moe_build"
-DEVICE_LIB = r"C:\HIP-SDK\lib\llvm\amdgcn\bitcode"
-os.makedirs(BUILD_DIR, exist_ok=True)
+HIPDIR = wp.build_dir("vw_moe_hip")
+BUILD_DIR = wp.build_dir("vw_moe_build", "VLLM_WIN_MOE_DIR", clean=True)
+DEVICE_LIB = wp.device_lib()
 
 SHIMS = {
     "ATen/cuda/CUDAContext.h": "#include <ATen/hip/HIPContext.h>\n"
@@ -74,7 +79,7 @@ print("rewrote", n, "files")
 src = [os.path.join(HIPDIR, "moe", "moe_align_sum_kernels.cu"),
        os.path.join(HIPDIR, "moe", "topk_softmax_kernels.cu"),
        os.path.join(HERE, "win_moe_bindings.cu")]
-HIPINC = os.environ.get("HIP_PATH", r"C:\HIP-SDK") + r"\include"
+HIPINC = wp.hip_include()
 print("=== compiling _moe_C ===")
 sys.stdout.flush()
 t0 = time.perf_counter()

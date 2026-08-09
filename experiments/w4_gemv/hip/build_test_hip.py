@@ -1,7 +1,17 @@
 """Build the HIP M=1 W4 GEMV and microbench it cache-cold vs the torch reference, at the 14B shapes.
 Compares to the Triton kernel's cold bandwidth (o 192, qkv 263, down 279, gate 535 GB/s)."""
 import os
+import sys
 import time
+
+_D = os.path.dirname(os.path.abspath(__file__))
+while _D != os.path.dirname(_D) and not os.path.isfile(os.path.join(_D, "tools", "winrocm_paths.py")):
+    _D = os.path.dirname(_D)
+sys.path.insert(0, os.path.join(_D, "tools"))
+import winrocm_paths as wp
+
+# short scratch dir for the JIT build (was set by build_run_hip.bat)
+os.environ.setdefault("TORCH_EXTENSIONS_DIR", wp.build_dir("vw_hipgemv_build", "VLLM_WIN_HIPGEMV_DIR"))
 
 import torch
 from torch.utils import cpp_extension
@@ -22,7 +32,7 @@ def _no_none(*a, **k):
 _hp.hipify = _no_none
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DEVICE_LIB = r"C:\HIP-SDK\lib\llvm\amdgcn\bitcode"
+DEVICE_LIB = wp.device_lib()
 G = 128
 
 mod = cpp_extension.load(

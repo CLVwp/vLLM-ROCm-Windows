@@ -12,6 +12,12 @@ import shutil
 import sys
 import time
 
+_D = os.path.dirname(os.path.abspath(__file__))
+while _D != os.path.dirname(_D) and not os.path.isfile(os.path.join(_D, "tools", "winrocm_paths.py")):
+    _D = os.path.dirname(_D)
+sys.path.insert(0, os.path.join(_D, "tools"))
+import winrocm_paths as wp
+
 import torch
 from torch.utils import cpp_extension
 from torch.utils.hipify.cuda_to_hip_mappings import CUDA_TO_HIP_MAPPINGS
@@ -29,13 +35,12 @@ def _no_none(*a, **k):
     return r
 _hp.hipify = _no_none
 
-VLLM_CSRC = r"C:\Users\filip\Desktop\Progetto_VLLM_ROCM_WINDOWS\vllm\csrc"
+VLLM_CSRC = wp.vllm_csrc()
 HERE = os.path.dirname(os.path.abspath(__file__))
 SHIM = os.path.join(HERE, "shim")
-HIPDIR = r"C:\vw_cext_hip"
-BUILD_DIR = r"C:\vw_cext_build"
-DEVICE_LIB = r"C:\HIP-SDK\lib\llvm\amdgcn\bitcode"
-os.makedirs(BUILD_DIR, exist_ok=True)
+HIPDIR = wp.build_dir("vw_cext_hip")
+BUILD_DIR = wp.build_dir("vw_cext_build", "VLLM_WIN_C_DIR", clean=True)
+DEVICE_LIB = wp.device_lib()
 
 # --- redirect shims (include safety net) ---
 SHIMS = {
@@ -110,7 +115,7 @@ cpp_extension.load(
         f"-I{SHIM}", f"-I{HIPDIR}",
     ],
     # hipblas/rocblas are needed by q_gemm.cu's reconstruct path (M>50 prefill).
-    extra_ldflags=["/LIBPATH:C:\\HIP-SDK\\lib", "hipblas.lib", "rocblas.lib", "amdhip64.lib"],
+    extra_ldflags=["/LIBPATH:" + wp.hip_lib(), "hipblas.lib", "rocblas.lib", "amdhip64.lib"],
     verbose=True,
 )
 print("BUILD_OK in", round(time.perf_counter() - t0, 1), "s")

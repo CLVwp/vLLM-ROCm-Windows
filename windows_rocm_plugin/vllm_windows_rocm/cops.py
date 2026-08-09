@@ -27,6 +27,19 @@ _INSTALLED = False
 _NATIVE_DIR = os.environ.get("VLLM_WIN_C_DIR", r"C:\vw_cext_build")
 
 
+def _hip_root() -> str:
+    """HIP SDK / ROCm install root; honours HIP_PATH first, then probes the usual locations."""
+    for var in ("HIP_PATH", "ROCM_PATH", "ROCM_HOME"):
+        v = (os.environ.get(var) or "").strip().rstrip("\\/")
+        if v and os.path.isdir(v):
+            return v
+    cands = [r"C:\HIP-SDK"] + sorted(glob.glob(r"C:\Program Files\AMD\ROCm\*"), reverse=True)
+    for c in cands:
+        if os.path.isdir(os.path.join(c, "bin")):
+            return c
+    return r"C:\HIP-SDK"
+
+
 def _load_native() -> str | None:
     """Load the compiled vLLM _C kernels (vllm_win_C.pyd) so its TORCH_LIBRARY(_C) wins."""
     if os.environ.get("VLLM_WIN_C_NATIVE", "1") == "0":
@@ -450,7 +463,7 @@ def maybe_patch_ck_prefill() -> None:
         return
     if _CK_VARLEN[0] is None:
         d = os.environ.get("VLLM_WIN_CKVARLEN_DIR", r"C:\vw_ckvarlen_build")
-        for hp in (r"C:\HIP-SDK\bin", r"C:\HIP-SDK\lib", d):
+        for hp in (os.path.join(_hip_root(), "bin"), os.path.join(_hip_root(), "lib"), d):
             try:
                 os.add_dll_directory(hp)
             except Exception:  # noqa: BLE001
