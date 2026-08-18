@@ -85,6 +85,22 @@ for dp, _, fns in os.walk(HIPDIR):
             open(p, "w", encoding="utf-8", newline="\n").write(s2)
             n += 1
 print("rewrote", n, "files")
+
+# ROCm 7.14 added its own atomicAdd(__half2*, __half2) in amd_hip_fp16.h, while vLLM's
+# quantization/gptq/compat.cuh declares the same overload unconditionally on ROCm. The two are
+# indistinguishable, so q_gemm.cu fails with "call to 'atomicAdd' is ambiguous" (reported on an
+# RX 9060 XT / ROCm 7.14 build; it is a HIP-version issue, not an arch one). Version-guard the
+# compat overload in the hipified copy so it disappears once HIP provides one. HIP < 7.14, and
+# any build where HIP_VERSION is not visible, keeps the current behaviour.
+_compat = os.path.join(HIPDIR, "quantization", "gptq", "compat.cuh")
+if os.path.isfile(_compat):
+    _cs = open(_compat, encoding="utf-8", errors="ignore").read()
+    _old = "#if __CUDA_ARCH__ < 600 || defined(USE_ROCM)"
+    _new = ("#if __CUDA_ARCH__ < 600 || (defined(USE_ROCM) && "
+            "!(defined(HIP_VERSION) && HIP_VERSION >= 71400000))")
+    if _old in _cs:
+        open(_compat, "w", encoding="utf-8").write(_cs.replace(_old, _new, 1))
+        print("patched compat.cuh: half2 atomicAdd guarded for HIP >= 7.14")
 _chk = open(os.path.join(HIPDIR, "activation_kernels.cu"), encoding="utf-8", errors="ignore").read()
 print("check: hipStream_t =", "hipStream_t" in _chk, "| cudaStream_t left =", "cudaStream_t" in _chk,
       "| MasqueradingAsCUDA =", "MasqueradingAsCUDA" in _chk)

@@ -487,6 +487,22 @@ def apply() -> None:
         sys.modules["torch.distributed.tensor"] = tmod
         dist.tensor = tmod
 
+        # ...except transformers >= 5.x does NOT guard it: sharding_utils.py does a bare
+        # `from torch.distributed.tensor._utils import compute_local_shape_and_global_offset`,
+        # so the "not a package" error would abort model loading. Register that ONE submodule
+        # under its full dotted name: importlib resolves sys.modules[full_name] before it asks
+        # whether the parent is a package, so `._api` still raises ModuleNotFoundError for
+        # torch.fx while this import succeeds.
+        umod = types.ModuleType("torch.distributed.tensor._utils")
+
+        def _compute_local_shape_and_global_offset(global_shape, *a, **k):
+            # world_size 1: the local shard IS the whole tensor, sitting at offset 0.
+            return tuple(global_shape), tuple(0 for _ in global_shape)
+
+        umod.compute_local_shape_and_global_offset = _compute_local_shape_and_global_offset
+        sys.modules["torch.distributed.tensor._utils"] = umod
+        tmod._utils = umod
+
     _install_amdsmi_stub(torch)
     _install_uvloop_stub()
     _install_fcntl_stub()
