@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Microbench the packed-along-K M=1 W4 GEMV (the plugin kernel) at real model shapes, with a
 correctness check vs a torch reference. Self-contained (kernel copied here for fast iteration).
 

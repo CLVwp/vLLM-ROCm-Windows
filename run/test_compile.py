@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Ground-truth probe: enable vLLM's inductor compile (VLLM_COMPILE=3) and capture the exact
 failure (expected: torch.distributed.tensor / DTensor import on USE_DISTRIBUTED=0).
 

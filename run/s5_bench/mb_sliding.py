@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Validate the new sliding_window param in native paged_attention_v1 (S5 correctness gate).
 (a) sliding_window=0 must equal full attention (no regression).
 (b) sliding_window=W must equal a windowed reference (query at pos seq_len-1 keeps tokens with

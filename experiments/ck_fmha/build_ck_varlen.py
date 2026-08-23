@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Build ck_fmha_varlen_C.pyd: ck_fmha_varlen(...) wrapping the CK ck_tile FMHA d128-fp16 GROUP-mode
 (varlen) nlogits causal + non-causal instances for gfx1100. Same recipe as build_ck_ext.py, group instances."""
 import os, shutil, sys, time, torch

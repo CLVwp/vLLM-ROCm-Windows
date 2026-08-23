@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """S5 de-risk PART B: Triton kernel_paged_attention_2d (the REAL ROCM_ATTN decode baseline) on the v0 paged
 KV layout. Same shapes as mb_native.py (1 decode token, head 256, GQA 16/8, block 16). Import vllm (no native
 pyd -> no _C conflict). Prints us/call. Compare directly with mb_native.py's NATIVE numbers."""

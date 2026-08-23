@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """A ablation (reliable, bypasses the broken profiler): under cudagraph, NO-OP a component (skip its
 compute, return a right-shape constant -> no weight read) and measure the decode tok/s ceiling. The
 tok/s delta vs baseline = that component's REAL cost. ABLATE in {none, dense, moe, attn}.

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Phase-2 benchmark harness: measure tok/s (prefill TTFT + decode) and VRAM on gfx1100.
 
 Run from run/ (avoids the vllm/ clone-dir shadowing). Configure via env:

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Verify the moe_decode autotune change: correctness (vs fp32 reference) + which BLOCK_N autotune picks +
 GB/s, on synthetic full-expert tensors (no model). gate_up (wide N) and down (narrow N)."""
 import os, time

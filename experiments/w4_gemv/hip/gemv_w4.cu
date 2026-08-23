@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 // M=1 W4A16 dequant-GEMV for RDNA3 (gfx1100), hand-written HIP to hit DRAM bandwidth.
 // Layout (conch-normalized): wq [K//8, N] uint32 packed-along-K straight order (value for global
 // row k is (wq[k/8, n] >> (k%8)*4) & 0xF); s [K//G, N] half; z [K//G, N] uint8; G=128.

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Phase B: custom M=1 (decode) MoE path for compressed-tensors W4A16 on RDNA3.
 
 At decode the batch is a single token, so only top_k (8) of the 128 experts are active. vLLM's

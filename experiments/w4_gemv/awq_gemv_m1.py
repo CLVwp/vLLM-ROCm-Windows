@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Dedicated M=1 AWQ W4A16 dequant-GEMV (Triton) for single-stream decode on RDNA3.
 
 Why: the exllama gptq_gemm and conch W4 GEMM are throughput kernels (split-K + atomicAdd +

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Build vLLM's csrc/moe helper kernels into a native Windows torch.ops._moe_C extension.
 
 Reuses the same hipify recipe as build_c_ext.py (PYTORCH_MAP word-boundary engine + redirect

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 # vllm-win: apply the single-process torch.distributed shim at EVERY interpreter startup, so vLLM's
 # model-inspection subprocess (`python -m vllm.model_executor.models.registry`, which does NOT load the
 # plugin) also gets a working torch.distributed on this USE_DISTRIBUTED=0 Windows torch. Without this,

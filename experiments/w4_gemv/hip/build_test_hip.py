@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Build the HIP M=1 W4 GEMV and microbench it cache-cold vs the torch reference, at the 14B shapes.
 Compares to the Triton kernel's cold bandwidth (o 192, qkv 263, down 279, gate 535 GB/s)."""
 import os

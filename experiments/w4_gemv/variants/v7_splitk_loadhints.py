@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """v7: split-K + reshape-free + load hints. The research-designed bandwidth kernel.
 
 - SPLIT-K (grid = N-tiles x K-splits) -> floods 84 CUs for small-N shapes (the occupancy fix).

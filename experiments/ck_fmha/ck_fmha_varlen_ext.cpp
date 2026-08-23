@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 // torch-callable CK ck_tile FMHA-fwd VARLEN (group mode) for gfx1100 -- the flash_attn_varlen ABI vLLM
 // prefill needs. ck_fmha_varlen(q,k,v,o, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, scale,
 // causal) on thd-packed tensors: q,o=[Tq,Hq,D]; k,v=[Tk,Hk,D]; cu_seqlens=int32[B+1] on device. fp16, d128.

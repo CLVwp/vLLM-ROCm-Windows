@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 // torch.ops._C.paged_attention_v1/v2 registration, built 1:1 from csrc/attention/ (the GENERIC
 // wave32-clean paged attention, NOT csrc/rocm/attention.cu which is wave64+MFMA gfx9-only) on native
 // Windows ROCm (gfx1100). Schemas copied verbatim from csrc/torch_bindings.cpp. torch::kCUDA (HIP

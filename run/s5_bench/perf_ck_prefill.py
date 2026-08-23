@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """CK ck_tile FMHA-varlen PREFILL lever on Win ROCm gfx1100. Measures TTFT (prefill latency) at several
 prompt lengths -- the axis CK actually moves (compute-bound WMMA attention), NOT single-stream decode.
 CK=1 -> VLLM_WIN_CK_PREFILL + TritonAttentionImpl.forward routes pure-prefill attention to CK varlen;

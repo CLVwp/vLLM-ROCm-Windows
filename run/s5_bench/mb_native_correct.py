@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """S5 correctness: does native _C.paged_attention_v1 produce CORRECT output at head_size 256, GQA 16q/8kv?
 Build logical Q,K,V; pack K,V into the v0 paged layout; run native; compare vs a reference softmax(QK*scale)V.
 No sliding mask here (full causal over the whole stored context = plain full attention for 1 query)."""

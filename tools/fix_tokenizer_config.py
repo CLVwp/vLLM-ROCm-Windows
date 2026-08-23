@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Fix a downloaded model whose tokenizer_config.json declares a tokenizer_class that
 transformers cannot resolve (e.g. llm-compressor exports that write
 '"tokenizer_class": "TokenizersBackend"'). Sets it to a class that loads tokenizer.json.

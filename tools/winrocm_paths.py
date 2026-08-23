@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Machine-independent path and toolchain resolution for the native Windows + ROCm build scripts.
 
 Everything that used to be hardcoded to one machine (HIP SDK location, repo checkout, scratch build

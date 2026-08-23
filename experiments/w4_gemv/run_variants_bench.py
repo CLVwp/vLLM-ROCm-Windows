@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Bench all GEMV variants in experiments/w4_gemv/variants/ cache-cold at real model shapes,
 with a correctness check vs a torch reference. Picks the best per shape. Run on the GPU (parent).
 """

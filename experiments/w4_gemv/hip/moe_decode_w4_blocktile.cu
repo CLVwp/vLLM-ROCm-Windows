@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 // moe_decode_w4 — fused-expert W4A16 MoE decode (M=1) for RDNA3 (gfx1100).
 // Strategy: "block-tile-ldsx".
 //   Grid (E, ceil(N/TILE)); each block handles a TILE of output rows for ONE expert.

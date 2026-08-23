@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Single-process `torch.distributed` shim for native Windows + ROCm.
 
 AMD/TheRock PyTorch wheels for Windows are built with USE_DISTRIBUTED=0: the

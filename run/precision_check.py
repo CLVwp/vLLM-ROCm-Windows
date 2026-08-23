@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Tier-A precision gate: greedy-decode a fixed prompt set and save the token sequences, so two
 runs (e.g. fp16 KV vs fp8 KV, or before/after a speed change) can be compared for drift.
 

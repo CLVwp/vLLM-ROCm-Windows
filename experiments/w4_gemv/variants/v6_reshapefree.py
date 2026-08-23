@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Reshape-free M=1 W4 GEMV: unpack the 8 nibbles in a static loop (tensors only [ROWS, BLOCK_N],
 never [GROUP, BLOCK_N]) so register pressure stays low and BLOCK_N can be >= 32 (wave32 width)
 for coalesced N-contiguous loads. Autotuned over BLOCK_N / num_warps / waves_per_eu."""

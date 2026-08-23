@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 // Phase-0 Gate A: minimal HIP device kernel compiled by hipcc (clang) for gfx1100.
 #include <torch/extension.h>
 

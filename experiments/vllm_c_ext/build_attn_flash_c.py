@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Build paged_attention_flash.cu (self-contained flash-layout decode paged-attention, my own HIP -> no
 csrc hipify needed) into vllm_win_attn_flash_C.pyd -> torch.ops._C.paged_attention_flash. Same HIP recipe
 as build_attn_c.py."""

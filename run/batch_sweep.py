@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Batch-scaling sweep: load Qwythos once (inductor mode=1 + FULL_DECODE_ONLY) and measure
 aggregate + per-request decode tok/s at increasing concurrency. Shows whether vLLM's value is
 throughput (high batch) vs single-stream latency (batch=1, where llama.cpp competes)."""

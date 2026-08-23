@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """S5 microbench PART A: native _C.paged_attention_v1 alone (no vllm import -> no _C namespace conflict).
 gemma sliding-layer decode: 1 query token, head_size 256, 16 q / 8 kv heads, context SEQ, block_size 16.
 Native v0 paged KV layout. Prints us/call for varying context."""

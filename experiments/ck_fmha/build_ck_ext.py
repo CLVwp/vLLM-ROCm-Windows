@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Build ck_fmha_C.pyd (torch.ops-free pybind): ck_fmha_fwd(q,k,v,o,scale,causal) wrapping the CK ck_tile
 FMHA d128-fp16 causal + non-causal instances for gfx1100. All sources compiled as .cu (hipcc) so the CK
 device headers + the kernel instances build. Recipe = build_attn_flash_c.py + CK flags + the memcpy patch."""

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Fast M=1 W4A16 dequant-GEMV for single-stream decode on RDNA3, wired as an MPLinearKernel
 registered ahead of conch in vLLM's ROCm kernel priority.
 

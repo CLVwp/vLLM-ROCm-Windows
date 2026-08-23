@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Insert the windows_rocm_rocm bootstrap import at the top of vLLM's package __init__,
 so the Windows/ROCm compatibility shims are installed before any vLLM submodule loads
 torch.distributed. Idempotent.

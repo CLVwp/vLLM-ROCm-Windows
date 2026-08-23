@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """WindowsRocmPlatform: vLLM RocmPlatform adapted for native Windows.
 
 RocmPlatform itself imports cleanly on Windows (its `amdsmi` import is wrapped in

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 // torch-callable CK ck_tile FMHA-fwd for gfx1100: ck_fmha_fwd(q,k,v,o, scale, causal) on [B,S,H,D]
 // contiguous tensors (GQA via Hk<Hq), fp16. Wraps the compiled causal + non-causal d128 instances.
 // Built by build_ck_ext.py. This is the phase-2 integration artifact (validate vs SDPA, then wire to vLLM).

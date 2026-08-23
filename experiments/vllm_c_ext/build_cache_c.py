@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Build csrc/cache_kernels.cu (reshape_and_cache_flash) into torch.ops._C_cache_ops on native Windows
 ROCm (gfx1100). Same proven recipe as build_c_ext.py. Only reshape_and_cache_flash is bound; the rest of
 the file (MLA/cp_gather/swap_blocks) compiles but is unbound."""

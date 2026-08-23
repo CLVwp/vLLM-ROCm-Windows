@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 // torch.ops._rocm_C registration for vLLM's rocm/ skinny GEMMs, built 1:1 from
 // csrc/rocm/skinny_gemms.cu on native Windows ROCm (gfx1100). Only the ops that have a working
 // RDNA3 (__HIP__GFX1X__) path are bound: LLMM1 (mat-vec) and wvSplitK (skinny mat-mat) -- exactly

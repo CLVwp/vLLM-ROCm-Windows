@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 // torch.ops._C registration for the first batch of vLLM fused ops, built 1:1 from vLLM's own
 // csrc kernels on native Windows. Schemas copied verbatim from csrc/torch_bindings.cpp.
 //

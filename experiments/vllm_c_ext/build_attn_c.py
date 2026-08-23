@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Compile-spike: build csrc/attention/{paged_attention_v1.cu,paged_attention_v2.cu} (generic wave32
 paged attention) into torch.ops._C.paged_attention_v1/v2 on native Windows ROCm (gfx1100). Same recipe
 as build_c_ext.py. Goal here is: does it COMPILE for gfx1100? block_size 128 + sliding-window mask come

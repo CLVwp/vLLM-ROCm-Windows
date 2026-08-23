@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Fallback implementations of the vLLM `torch.ops._C.*` fused ops, for the no-native-kernel
 (VLLM_TARGET_DEVICE=empty) Windows build.
 

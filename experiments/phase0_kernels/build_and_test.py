@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Phase-0+ kernel hardening: build & validate real HIP kernels on gfx1100.
 
 Run with MSVC env active (see experiments/phase0_hip_ext/README.md), e.g.:

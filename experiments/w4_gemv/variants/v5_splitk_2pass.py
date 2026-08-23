@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """
 v5_splitk_2pass: SPLIT-K two-pass W4A16 dequant-GEMV (M=1) for gfx1100 / RDNA3.
 

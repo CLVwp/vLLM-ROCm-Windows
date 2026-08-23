@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 // torch.ops._C_cache_ops.reshape_and_cache_flash registration, built 1:1 from csrc/cache_kernels.cu
 // on native Windows ROCm (gfx1100). vLLM's v1 attention calls torch.ops._C_cache_ops.reshape_and_cache_flash
 // for the per-token KV write; on ROCm it currently falls back to a Triton kernel. Building this lets the

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Out-of-tree vLLM platform plugin for native Windows + AMD ROCm (RDNA3 / gfx1100).
 
 vLLM resolves the active platform by calling every registered `vllm.platform_plugins`

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Phase-1 milestone: first token from vLLM on native Windows + ROCm (gfx1100).
 
 Kept in run/ (NOT the project root) so sys.path[0] doesn't shadow the editable `vllm`

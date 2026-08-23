@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Build vLLM's csrc fused-op kernels into a native Windows torch.ops._C extension.
 
 This TheRock Windows torch ships ATen/cuda & c10/cuda as non-redirecting CUDA stubs (Linux

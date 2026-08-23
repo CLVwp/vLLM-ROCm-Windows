@@ -261,5 +261,13 @@ set HF_HUB_OFFLINE=1
 
 ## License
 
-This repository's glue code is Apache-2.0, matching vLLM. vLLM itself is not included here
-and remains under its own license.
+Apache-2.0, matching vLLM. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+Copyright 2026 ThePie88. The plugin, the native HIP and Triton kernels, their build harnesses
+and the benchmark harnesses are original work; every source file carries an SPDX header.
+**If you redistribute this code, in source or binary form, section 4 of the license requires you
+to keep those headers and to carry the NOTICE contents.** Attribution is the only thing asked in
+return, so please credit the project and link back to it.
+
+vLLM itself is not included here and remains under its own license; files under `patches/vllm/`
+contain vLLM source and are covered by vLLM's copyright, not the above.

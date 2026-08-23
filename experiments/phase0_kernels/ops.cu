@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 // Phase-0+ kernel hardening: two REAL kernels on gfx1100.
 //  (1) rmsnorm  — a genuine LLM op (block reduction + normalize + weight), fp32.
 //  (2) wmma_gemm — fp16 -> fp32 GEMM using rocWMMA 16x16x16 wave32 (the RDNA3 matrix path).

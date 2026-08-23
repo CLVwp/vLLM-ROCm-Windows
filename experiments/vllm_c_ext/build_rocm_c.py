@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Build vLLM's csrc/rocm/skinny_gemms.cu (LLMM1 + wvSplitK) into a native Windows torch.ops._rocm_C
 extension for gfx1100 (RDNA3). Same proven recipe as build_c_ext.py: hipify csrc with torch's own
 PYTORCH_MAP engine + ATen/c10 cuda->hip shim headers, then cpp_extension.load. skinny_gemms.cu already

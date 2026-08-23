@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """Flash-layout decode kernel: correctness vs fp32 reference (incl. sliding) + timing.
 Cache is TRITON_ATTN's flash layout kc/vc [num_blocks, block_size, num_kv_heads, head_size]."""
 import os, sys, math, time

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 """ERNIE-4.5-21B-A3B (compressed-tensors W4A16 gs32 MoE, head_dim 128 uniform, no sliding) on Win ROCm.
 Fits VRAM with big headroom (~11GB weights on 20GB) -> NO WDDM shared-memory spill -> reliable tok/s.
 head 128 uniform => S5 works GLOBALLY (attention_backend=ROCM_ATTN, no per-layer routing).

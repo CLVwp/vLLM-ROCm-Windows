@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)
 // Decode-only (1 query/seq) paged attention that reads TRITON_ATTN's FLASH KV layout directly:
 //   k_cache / v_cache : [num_blocks, block_size, num_kv_heads, head_size]  (both, after kv_cache.unbind(1))
 // so it can replace unified_attention for a pure-decode step WITHOUT a v0 repack and WITHOUT the heavy
