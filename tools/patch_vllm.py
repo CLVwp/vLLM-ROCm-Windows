@@ -4,8 +4,14 @@
 so the Windows/ROCm compatibility shims are installed before any vLLM submodule loads
 torch.distributed. Idempotent.
 
+Also applies the repo's vLLM source patches (patches/vllm/*.patch) to the checkout when
+git is available, so a fresh clone reaches the documented behaviour without manual
+`git -C vllm apply` steps. Patching is skipped (with a notice) when the checkout is not
+a git work tree; already-applied patches are detected and skipped, making re-runs safe.
+
 Usage: python tools/patch_vllm.py [path-to-vllm-checkout]   (default: ./vllm)
 """
+import subprocess
 import sys
 import os
 
@@ -20,6 +26,55 @@ BLOCK = (
 )
 
 
+def _repo_root() -> str:
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _git_apply(vllm_root: str, patch_path: str, *extra: str) -> subprocess.CompletedProcess:
+    """git apply with the flags that make Windows-checkout patches behave:
+    --ignore-whitespace (CRLF vs LF mismatches between checkout and patch files)."""
+    return subprocess.run(
+        ["git", "-C", vllm_root, "apply", "--ignore-whitespace", "--whitespace=nowarn",
+         *extra, patch_path],
+        capture_output=True, text=True,
+    )
+
+
+def _patch_already_applied(vllm_root: str, patch_path: str) -> bool:
+    """True when reverse-applying cleanly succeeds, i.e. the patch is already in the tree."""
+    return _git_apply(vllm_root, patch_path, "--check", "-R").returncode == 0
+
+
+def apply_source_patches(vllm_root: str) -> int:
+    patch_dir = os.path.join(_repo_root(), "patches", "vllm")
+    if not os.path.isdir(patch_dir):
+        return 0
+    patches = sorted(f for f in os.listdir(patch_dir) if f.endswith(".patch"))
+    if not patches:
+        return 0
+    probe = subprocess.run(
+        ["git", "-C", vllm_root, "rev-parse", "--is-inside-work-tree"],
+        capture_output=True,
+    )
+    if probe.returncode != 0:
+        print(f"notice: {vllm_root} is not a git work tree; skipping "
+              f"{len(patches)} source patch(es) — apply them manually per patches/README.md")
+        return 0
+    failures = 0
+    for name in patches:
+        p = os.path.join(patch_dir, name)
+        if _patch_already_applied(vllm_root, p):
+            print(f"already applied: {name}")
+            continue
+        r = _git_apply(vllm_root, p)
+        if r.returncode == 0:
+            print(f"applied: {name}")
+        else:
+            failures += 1
+            print(f"FAILED to apply {name}: {r.stderr.strip()}", file=sys.stderr)
+    return 1 if failures else 0
+
+
 def main(argv):
     vllm_root = argv[0] if argv else "vllm"
     init_py = os.path.join(vllm_root, "vllm", "__init__.py")
@@ -29,18 +84,18 @@ def main(argv):
     src = open(init_py, encoding="utf-8").read()
     if MARK in src:
         print("already patched")
-        return 0
-    anchor = "from .version import __version__"
-    idx = src.find(anchor)
-    if idx == -1:
-        # fall back: prepend
-        new = BLOCK + src
     else:
-        eol = src.find("\n", idx)
-        new = src[: eol + 1] + BLOCK + src[eol + 1 :]
-    open(init_py, "w", encoding="utf-8", newline="\n").write(new)
-    print("patched", init_py)
-    return 0
+        anchor = "from .version import __version__"
+        idx = src.find(anchor)
+        if idx == -1:
+            # fall back: prepend
+            new = BLOCK + src
+        else:
+            eol = src.find("\n", idx)
+            new = src[: eol + 1] + BLOCK + src[eol + 1 :]
+        open(init_py, "w", encoding="utf-8", newline="\n").write(new)
+        print("patched", init_py)
+    return apply_source_patches(vllm_root)
 
 
 if __name__ == "__main__":

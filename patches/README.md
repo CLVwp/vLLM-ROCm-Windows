@@ -8,13 +8,17 @@ harness) lives in this repo and is monkeypatched/loaded at runtime without touch
 
 Clone base when these were generated: vLLM `b1388b1` (v0.19.2.dev0).
 
-Apply from the repo root:
+**These patches are applied automatically** by `python tools/patch_vllm.py vllm` (the same
+step that installs the bootstrap import): already-applied patches are detected and skipped,
+so the command is safe to re-run, and it is the required step for `vllm serve` to work on
+Windows (see `windows-serve-windows.patch` below). The manual flow remains as fallback:
 
 ```
-git -C vllm apply ../patches/vllm/conch-group-size.patch
-git -C vllm apply ../patches/vllm/gemma4-moe-weightload.patch
-git -C vllm apply ../patches/vllm/kvarn.patch
-git -C vllm apply ../patches/vllm/windows-serve-windows.patch
+git -C vllm apply --ignore-whitespace ../patches/vllm/conch-group-size.patch
+git -C vllm apply --ignore-whitespace ../patches/vllm/gemma4-moe-weightload.patch
+git -C vllm apply --ignore-whitespace ../patches/vllm/kvarn.patch
+git -C vllm apply --ignore-whitespace ../patches/vllm/native-attn-sliding-window.patch
+git -C vllm apply --ignore-whitespace ../patches/vllm/windows-serve-windows.patch
 ```
 
 ## windows-serve-windows.patch
