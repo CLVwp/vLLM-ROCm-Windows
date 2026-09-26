@@ -576,6 +576,8 @@ def _install_uvloop_stub() -> None:
     m.Loop = asyncio.AbstractEventLoop
 
     def _run(coro, *a, **k):
+        if sys.platform == "win32":
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
         return asyncio.run(coro)
 
     m.run = _run

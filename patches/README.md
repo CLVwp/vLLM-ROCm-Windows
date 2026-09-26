@@ -14,7 +14,13 @@ Apply from the repo root:
 git -C vllm apply ../patches/vllm/conch-group-size.patch
 git -C vllm apply ../patches/vllm/gemma4-moe-weightload.patch
 git -C vllm apply ../patches/vllm/kvarn.patch
+git -C vllm apply ../patches/vllm/windows-serve-windows.patch
 ```
+
+## windows-serve-windows.patch
+Makes the vLLM HTTP server compatible with native Windows: avoids Linux-only socket options,
+uses TCP instead of ZeroMQ IPC for local engine sockets, avoids polling Windows process handles
+through ZMQ, and uses Windows-compatible signal handling.
 
 ## conch-group-size.patch
 `conch.py`: conch's Triton W4A16 kernel applies one scale per `block_k == 64` tile, so it is only

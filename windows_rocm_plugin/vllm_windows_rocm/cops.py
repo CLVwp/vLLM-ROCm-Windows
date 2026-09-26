@@ -123,6 +123,17 @@ def _rotary_embedding(positions, query, key, head_size, cos_sin_cache, is_neox) 
         key.copy_(k2)
 
 
+def _apply_repetition_penalties(
+    logits: torch.Tensor,
+    prompt_mask: torch.Tensor,
+    output_mask: torch.Tensor,
+    repetition_penalties: torch.Tensor,
+) -> None:
+    penalties = repetition_penalties.unsqueeze(1).expand_as(logits)
+    penalties = torch.where(prompt_mask | output_mask, penalties, 1.0)
+    logits.mul_(torch.where(logits > 0, 1.0 / penalties, penalties))
+
+
 def _moe_align_block_size(topk_ids, num_experts, block_size, sorted_token_ids,
                           experts_ids, num_tokens_post_pad, maybe_expert_map):
     # Torch fallback for torch.ops._moe_C.moe_align_block_size (no _moe_C on Windows).
@@ -254,6 +265,8 @@ _OPS = [
      _fused_add_rms_norm),
     ("rotary_embedding(Tensor positions, Tensor(a!) query, Tensor(b!)? key, int head_size, "
      "Tensor cos_sin_cache, bool is_neox) -> ()", _rotary_embedding),
+    ("apply_repetition_penalties_(Tensor(a!) logits, Tensor prompt_mask, Tensor output_mask, "
+     "Tensor repetition_penalties) -> ()", _apply_repetition_penalties),
     ("weak_ref_tensor(Tensor(a) input) -> Tensor(a)", _weak_ref_tensor),
 ]
 
