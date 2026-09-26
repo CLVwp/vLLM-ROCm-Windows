@@ -66,20 +66,22 @@ venv, and `rocm-sdk.exe` is not on PATH by default → export `ROCM_HOME` (or `H
 pointing at the SDK root. The Python package `rocm_sdk` works without PATH; triton could
 prefer it over the CLI probe.
 
-### 3. The installed HIP SDK 7.2 has no gfx110x device bitcode
+### 3. The installed HIP SDK 7.2 toolchain fails the native build; the pip SDK works
 
-The Windows HIP SDK 7.2 (`C:\Program Files\AMD\ROCm\7.2`) ships `amdgcn/bitcode` without any
-gfx1100/gfx1101 objects on this machine, so the native build fails with
-`cannot find ROCm device library` even though `--rocm-device-lib-path` points at it. The
-pip SDK (`_rocm_sdk_devel` wheel from the same index as torch) does ship gfx1101 bitcode
-(`.../lib/llvm/amdgcn/bitcode/oclc_isa_version_1101.bc`). Fix: run the native build with
-`HIP_PATH` pointed at the pip SDK:
+The first native-build attempt with the auto-detected HIP SDK 7.2
+(`C:\Program Files\AMD\ROCm\7.2`) failed with `cannot find ROCm device library` from
+`clang.exe`, even though `--rocm-device-lib-path` pointed at the SDK's own
+`amdgcn\bitcode` (which does ship `oclc_isa_version_1101.bc`). Building through the pip
+SDK's toolchain instead resolved it, and also keeps compiler/bitcode consistent with the
+torch wheel. Fix: run the native build with `HIP_PATH` pointed at the pip SDK:
 
 ```bat
 set HIP_PATH=C:\AI\vllm-venv\Lib\site-packages\_rocm_sdk_devel
 ```
 
 `tools/winrocm_env.bat` already honours a pre-set `HIP_PATH`, so no code change needed.
+(The follow-up PR adds a `hip_root_for_arch` helper that prefers an SDK whose bitcode
+matches the target arch and prints an actionable message otherwise.)
 
 ### 4. atomicAdd(half/half2) ambiguous on HIP 7.13 — and the 7.14 guard could never work
 
