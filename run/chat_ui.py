@@ -24,9 +24,14 @@ let model='Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4',messages=[],libsReady=false;
 
 // markdown + LaTeX rendering, with graceful plain-text fallback when the CDN is
 // unreachable (offline boxes must still chat). $...$/$$...$$/\(...\)/\[...\] all render.
-marked.setOptions({breaks:true,gfm:true});
+// NOTE: the CDN libs are deferred, so they may not exist when this inline script runs.
+// Everything touching them is guarded: a ReferenceError here would kill the whole
+// script, leaving onsubmit unattached (native form submit -> GET /? -> 404) and the
+// status stuck on "Connecting...".
+if (window.marked) marked.setOptions({breaks:true,gfm:true});
 function render(el,text){
-  el.innerHTML=DOMPurify.sanitize(marked.parse(text));
+  if(!(window.marked && window.DOMPurify)){ el.textContent = text; return; }
+  el.innerHTML = DOMPurify.sanitize(marked.parse(text));
   if(window.renderMathInElement){
     renderMathInElement(el,{delimiters:[
       {left:'$$',right:'$$',display:true},
