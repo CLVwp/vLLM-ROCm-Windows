@@ -4,7 +4,83 @@
 
 A .pth startup hook (`import vllm_windows_rocm.bootstrap`) makes this run before any
 `import vllm`, so vLLM sees a working (single-process) torch.distributed from the start.
+
+It also pre-sets environment variables that upstream components resolve at import time
+and otherwise fail on silently:
+
+- ROCM_HOME: triton's AMD driver resolves the SDK root by shelling out to
+  `rocm-sdk path --root` at import; when that CLI is not on PATH (the usual case with a
+  pip-installed SDK), the HIP include dir is never added and the first Triton JIT kernel
+  dies with `fatal error: 'hip/hip_runtime.h' file not found`. Deriving it from the
+  `rocm_sdk` Python package (no PATH needed) and exporting it here makes that path work.
+- TMP/TEMP: tvm-ffi and the triton JIT compile through paths that break on non-ASCII
+  characters; if the user profile lives under a non-ASCII path (e.g. C:\\Users\\PC-Clément),
+  the temp dirs default there. Pointing TMP/TEMP at an ASCII location (LOCALAPPDATA when
+  it is ASCII, else <system drive>\\vllm_win_tmp) fixes every temp-path failure seen so
+  far. A warning is printed when no ASCII option is found.
 """
+import os
+import tempfile
+
 from .torchdist_shim import apply
 
 apply()
+
+
+def _is_ascii(path: str) -> bool:
+    try:
+        path.encode("ascii")
+        return True
+    except UnicodeEncodeError:
+        return False
+
+
+def _ensure_rocm_home() -> None:
+    if os.environ.get("ROCM_HOME") or os.environ.get("HIP_PATH"):
+        return  # user pinned it; never override an explicit choice
+    try:
+        import rocm_sdk
+    except ImportError:
+        return
+    try:
+        libs = rocm_sdk.find_libraries("amdhip64")
+    except Exception:  # noqa: BLE001
+        return
+    if not libs:
+        return
+    d = os.path.dirname(str(libs[0]))
+    # .../_rocm_sdk_devel/bin/amdhip64_7.dll -> the _rocm_sdk_* package dir is the root
+    while d and not os.path.basename(d).startswith("_rocm_sdk"):
+        nd = os.path.dirname(d)
+        if nd == d:
+            return
+        d = nd
+    if d and os.path.isfile(os.path.join(d, "include", "hip", "hip_runtime.h")):
+        os.environ["ROCM_HOME"] = d
+
+
+def _ensure_ascii_tmp() -> None:
+    cur = os.environ.get("TMP") or os.environ.get("TEMP") or tempfile.gettempdir()
+    if _is_ascii(cur):
+        return
+    sysdrive = os.environ.get("SystemDrive", "C:")
+    cands = [os.environ.get("LOCALAPPDATA", ""), os.path.join(sysdrive, "\\")]
+    for base in cands:
+        if not base or not _is_ascii(base):
+            continue
+        target = os.path.join(base, "vllm_win_tmp")
+        try:
+            os.makedirs(target, exist_ok=True)
+        except OSError:
+            continue
+        for var in ("TMP", "TEMP", "TMPDIR"):
+            os.environ[var] = target
+        print(f"vllm-win: TMP/TEMP was under a non-ASCII path ({cur}); "
+              f"redirected to {target} (non-ASCII paths break native DLL/JIT compilation).")
+        return
+    print("vllm-win WARNING: TMP/TEMP is under a non-ASCII path and no ASCII fallback was "
+          "found; triton JIT compilation may fail. Set TMP/TEMP to an ASCII directory.")
+
+
+_ensure_rocm_home()
+_ensure_ascii_tmp()

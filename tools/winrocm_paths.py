@@ -53,6 +53,88 @@ def hip_root() -> str:
         '    set HIP_PATH=C:\\Program Files\\AMD\\ROCm\\7.2')
 
 
+def pip_sdk_roots() -> list[str]:
+    """ROCm SDK roots pip-installed in the current environment (TheRock wheels).
+
+    The `_rocm_sdk_devel` wheel ships the full device bitcode set for its gfx family
+    (e.g. gfx110X-all), which the installed Windows HIP SDK may not (7.2 ships none for
+    gfx110x on some installs)."""
+    try:
+        import rocm_sdk
+    except ImportError:
+        return []
+    roots = []
+    try:
+        out = rocm_sdk.find_libraries("amdhip64")
+        # roots look like .../_rocm_sdk_devel/bin/amdhip64_7.dll -> walk up to the package dir
+        for lib in out or []:
+            d = os.path.dirname(str(lib))
+            while d and os.path.basename(d) not in ("_rocm_sdk_devel", "_rocm_sdk_core"):
+                nd = os.path.dirname(d)
+                if nd == d:
+                    break
+                d = nd
+            if os.path.basename(d) in ("_rocm_sdk_devel", "_rocm_sdk_core") and d not in roots:
+                roots.append(d)
+    except Exception:  # noqa: BLE001
+        pass
+    return roots
+
+
+def _bitcode_has_arch(bc_dir: str, arch: str) -> bool:
+    """True if the bitcode dir contains ISA objects for the target gfx arch.
+
+    gfx1101 bitcode ships as oclc_isa_version_1101.bc; check both the plain isa-version
+    name and a direct gfx prefix."""
+    isa = "".join(ch for ch in arch if ch.isdigit())
+    try:
+        names = os.listdir(bc_dir)
+    except OSError:
+        return False
+    return any(arch in n or f"isa_version_{isa}" in n for n in names if n.endswith(".bc"))
+
+
+def hip_root_for_arch(arch: str) -> str:
+    """hip_root(), but preferring a root that actually has device bitcode for `arch`.
+
+    The installed HIP SDK (e.g. 7.2 under Program Files) can lack gfx110x bitcode entirely;
+    compiling for a detected gfx1101 then fails with 'cannot find ROCm device library'.
+    If the env-pinned root lacks the bitcode but a pip SDK has it, use the pip SDK and say
+    so (an explicit HIP_PATH/ROCM_HOME always wins silently — the user asked for it)."""
+    pinned = None
+    for var in ("HIP_PATH", "ROCM_PATH", "ROCM_HOME"):
+        v = (os.environ.get(var) or "").strip().rstrip("\\/")
+        if v and os.path.isdir(v):
+            pinned = v
+            break
+    root = hip_root()
+    bc = _bitcode_dir_of(root)
+    if bc and _bitcode_has_arch(bc, arch):
+        return root
+    for pip_root in pip_sdk_roots():
+        pbc = _bitcode_dir_of(pip_root)
+        if pbc and _bitcode_has_arch(pbc, arch):
+            if pip_root != root:
+                print(f"winrocm: '{root}' has no {arch} device bitcode; "
+                      f"using pip SDK {pip_root} (set HIP_PATH to override)")
+            return pip_root
+    if pinned:
+        return pinned
+    raise RuntimeError(
+        f"No ROCm device bitcode for {arch} found under '{root}'"
+        + (f" or the pip SDK roots {pip_sdk_roots()}" if pip_sdk_roots() else "")
+        + ". Point HIP_PATH at an SDK that ships it, e.g. the pip-installed "
+        "_rocm_sdk_devel wheel from the same TheRock index as torch.")
+
+
+def _bitcode_dir_of(root: str) -> str | None:
+    for rel in (("lib", "llvm", "amdgcn", "bitcode"), ("amdgcn", "bitcode"), ("lib", "bitcode")):
+        p = os.path.join(root, *rel)
+        if os.path.isdir(p):
+            return p
+    return None
+
+
 def hip_bin() -> str:
     return os.path.join(hip_root(), "bin")
 
@@ -66,8 +148,15 @@ def hip_include() -> str:
 
 
 def device_lib() -> str:
-    """amdgcn device bitcode for --rocm-device-lib-path (layout moved between SDK versions)."""
-    root = hip_root()
+    """amdgcn device bitcode for --rocm-device-lib-path (layout moved between SDK versions).
+
+    Resolved through hip_root_for_arch(): if the primary SDK has no bitcode for the build's
+    target arch (e.g. an installed HIP SDK 7.2 without gfx110x objects), the pip-installed
+    SDK wheel is used instead, so the build succeeds on cards the installed SDK predates."""
+    try:
+        root = hip_root_for_arch(offload_arch())
+    except Exception:  # noqa: BLE001  (arch unknown at import time in some callers)
+        root = hip_root()
     for rel in (("lib", "llvm", "amdgcn", "bitcode"), ("amdgcn", "bitcode"), ("lib", "bitcode")):
         p = os.path.join(root, *rel)
         if os.path.isdir(p):
