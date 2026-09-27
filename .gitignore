@@ -23,3 +23,9 @@ __pycache__/
 .idea/
 .DS_Store
 Thumbs.db
+.venv/
+*.egg-info/
+first_token.log
+bench.log
+pip_*.log
+build_c_ext.log

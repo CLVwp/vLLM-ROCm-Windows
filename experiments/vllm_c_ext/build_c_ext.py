@@ -57,7 +57,9 @@ SHIMS = {
 for rel, body in SHIMS.items():
     dst = os.path.join(SHIM, *rel.split("/"))
     os.makedirs(os.path.dirname(dst), exist_ok=True)
-    open(dst, "w", encoding="utf-8", newline="\n").write("#pragma once\n" + body)
+    _spdx = ("// SPDX-License-Identifier: Apache-2.0\n"
+             "// Copyright (c) 2026 ThePie88 (https://github.com/ThePie88/vLLM-ROCm-Windows)\n")
+    open(dst, "w", encoding="utf-8", newline="\n").write(_spdx + "#pragma once\n" + body)
 
 # --- hipify using torch's REAL pytorch substitution engine, bypassing its (Windows-broken)
 # file-orchestrator. RE_PYTORCH_PREPROCESSOR + PYTORCH_MAP is exactly what hipify applies for
@@ -94,15 +96,35 @@ print("rewrote", n, "files")
 # RX 9060 XT / ROCm 7.14 build; it is a HIP-version issue, not an arch one). Version-guard the
 # compat overload in the hipified copy so it disappears once HIP provides one. HIP < 7.14, and
 # any build where HIP_VERSION is not visible, keeps the current behaviour.
+# ROCm 7.13+ added its own atomicAdd(__half*, __half) and atomicAdd(__half2*, __half2) in
+# amd_hip_fp16.h, while vLLM's quantization/gptq/compat.cuh declares the same overloads
+# unconditionally on ROCm. The two are indistinguishable, so q_gemm.cu fails with "call to
+# 'atomicAdd' is ambiguous" (seen on ROCm 7.13 pip SDK and reported on RX 9060 XT / ROCm 7.14;
+# it is a HIP-version issue, not an arch one). Version-guard BOTH compat overloads in the
+# hipified copy so they disappear once HIP provides them. HIP < 7.13, and any build where
+# HIP_VERSION is not visible, keeps the current behaviour.
 _compat = os.path.join(HIPDIR, "quantization", "gptq", "compat.cuh")
 if os.path.isfile(_compat):
     _cs = open(_compat, encoding="utf-8", errors="ignore").read()
-    _old = "#if __CUDA_ARCH__ < 600 || defined(USE_ROCM)"
-    _new = ("#if __CUDA_ARCH__ < 600 || (defined(USE_ROCM) && "
-            "!(defined(HIP_VERSION) && HIP_VERSION >= 71400000))")
-    if _old in _cs:
-        open(_compat, "w", encoding="utf-8").write(_cs.replace(_old, _new, 1))
-        print("patched compat.cuh: half2 atomicAdd guarded for HIP >= 7.14")
+    _changed = False
+    # HIP >= 7.13 ships native atomicAdd(__half*, __half) / (__half2*, __half2); vLLM's compat
+    # overloads then clash ("call to 'atomicAdd' is ambiguous"). NB: hipcc does NOT define
+    # __CUDA_ARCH__ in the device pass, and an undefined identifier evaluates to 0 in #if, so
+    # the original `#if __CUDA_ARCH__ < 700 || defined(USE_ROCM)` is ALWAYS true on ROCm and
+    # can never be version-guarded. Guard both arms explicitly instead.
+    for _old, _lt in (("#if __CUDA_ARCH__ < 700 || defined(USE_ROCM)", "700"),
+                      ("#if __CUDA_ARCH__ < 600 || defined(USE_ROCM)", "600")):
+        _new = (f"#if (defined(__CUDA_ARCH__) && __CUDA_ARCH__ < {_lt}) || "
+                "(defined(USE_ROCM) && "
+                "!(defined(HIP_VERSION) && HIP_VERSION >= 71300000))")
+        if _old in _cs:
+            _cs = _cs.replace(_old, _new, 1)
+            _changed = True
+    if _changed and '#include <hip/hip_version.h>' not in _cs:
+        _cs = _cs.replace('#define _compat_cuh', '#define _compat_cuh\n#include <hip/hip_version.h>', 1)
+    if _changed:
+        open(_compat, "w", encoding="utf-8").write(_cs)
+        print("patched compat.cuh: half/half2 atomicAdd guarded for HIP >= 7.13 (defined() fix)")
 _chk = open(os.path.join(HIPDIR, "activation_kernels.cu"), encoding="utf-8", errors="ignore").read()
 print("check: hipStream_t =", "hipStream_t" in _chk, "| cudaStream_t left =", "cudaStream_t" in _chk,
       "| MasqueradingAsCUDA =", "MasqueradingAsCUDA" in _chk)
