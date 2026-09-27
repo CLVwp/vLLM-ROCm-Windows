@@ -26,7 +26,7 @@ foreach ($d in @($env:TMP, $env:HF_HOME, $env:VLLM_CACHE_ROOT, $env:TRITON_CACHE
     New-Item -ItemType Directory -Force -Path $d | Out-Null
 }
 
-# ===== Comportement vLLM sur Windows ROCm (defauts valides, surchargeables) =====
+# ===== vLLM behaviour on Windows ROCm (validated defaults, all overridable) =====
 $env:VLLM_ENABLE_V1_MULTIPROCESSING = "0"
 $env:VLLM_ROCM_USE_SKINNY_GEMM = "0"
 $env:VLLM_ROCM_USE_AITER = "0"
