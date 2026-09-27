@@ -28,9 +28,12 @@ let model='Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4',messages=[],libsReady=false;
 // Everything touching them is guarded: a ReferenceError here would kill the whole
 // script, leaving onsubmit unattached (native form submit -> GET /? -> 404) and the
 // status stuck on "Connecting...".
-if (window.marked) marked.setOptions({breaks:true,gfm:true});
+let mdConfigured=false;
 function render(el,text){
   if(!(window.marked && window.DOMPurify)){ el.textContent = text; return; }
+  // configure marked HERE, not at top level: when this inline script runs the deferred
+  // libs never exist yet, so a guarded top-level setOptions would silently never apply.
+  if(!mdConfigured){ marked.setOptions({breaks:true,gfm:true}); mdConfigured=true; }
   el.innerHTML = DOMPurify.sanitize(marked.parse(text));
   if(window.renderMathInElement){
     renderMathInElement(el,{delimiters:[
