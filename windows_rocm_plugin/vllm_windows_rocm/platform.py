@@ -96,3 +96,10 @@ class WindowsRocmPlatform(RocmPlatform):
             awq_gemv.register()
         except Exception as e:  # noqa: BLE001
             print("vllm-win awq_gemv register warning:", repr(e))
+        # Optional static KV-cache scales for fp8 KV (VLLM_WIN_KV_KSCALE /
+        # VLLM_WIN_KV_VSCALE). No-op unless the env vars are set.
+        try:
+            from . import kv_scales
+            kv_scales.register()
+        except Exception as e:  # noqa: BLE001
+            print("vllm-win kv_scales register warning:", repr(e))

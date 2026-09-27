@@ -110,6 +110,8 @@ def main() -> None:
     )
     if SCALES:
         kwargs["calculate_kv_scales"] = True
+    if os.environ.get("VLLM_KV_NOCHUNK", "0") == "1":
+        kwargs["enable_chunked_prefill"] = False
     llm = LLM(**kwargs)
     tok = llm.get_tokenizer()
 
