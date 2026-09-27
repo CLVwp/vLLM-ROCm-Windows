@@ -8,6 +8,7 @@ hipify them ourselves by applying torch's OWN CUDA_TO_HIP_MAPPINGS with word bou
 (so e.g. `cub` is not rewritten inside `hipcub`), longest-token-first. Redirect shim headers
 are also placed first on the include path as a safety net for any include path we miss.
 """
+import glob
 import os
 import re
 import shutil
@@ -136,6 +137,21 @@ src = [os.path.join(HIPDIR, "activation_kernels.cu"),
        # single-stream decode -- the general fix for the conch fallback being ~21x off at M=1.
        os.path.join(HIPDIR, "quantization", "gptq", "q_gemm.cu"),
        os.path.join(HERE, "win_c_bindings.cu")]
+# The running interpreter itself maps the previous vllm_win_C.pyd (sitecustomize loads it at
+# startup), so build_dir's rmtree cannot delete it and link.exe then fails with LNK1104 trying to
+# overwrite a mapped DLL. Windows does allow RENAMING a mapped file: move it aside instead.
+for _stale in glob.glob(os.path.join(BUILD_DIR, "vllm_win_C*.pyd")):
+    try:
+        os.remove(_stale)
+    except PermissionError:
+        _aside = _stale + ".stale"
+        try:
+            os.remove(_aside)
+        except OSError:
+            pass
+        os.replace(_stale, _aside)
+        print("renamed mapped", os.path.basename(_stale), "aside (was loaded by this process)")
+
 print("=== compiling ===")
 sys.stdout.flush()
 t0 = time.perf_counter()
