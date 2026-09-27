@@ -166,12 +166,16 @@ def device_lib() -> str:
 
 def build_root() -> str:
     """Parent of the scratch build dirs. Kept short: ninja/MSVC hit the Windows 260-char path limit
-    on deep trees, which is why these live at the drive root rather than inside the repo."""
+    on deep trees, which is why these live at the drive root rather than inside the repo.
+
+    Default here is C:\\AI\\build (ASCII-first location) when it exists, falling back to the
+    drive root; winrocm_env.bat sets the same default for the .bat wrappers. Override freely
+    with VLLM_WIN_BUILD_ROOT."""
     v = (os.environ.get("VLLM_WIN_BUILD_ROOT") or "").strip()
     if v:
         os.makedirs(v, exist_ok=True)
         return v
-    for cand in ("C:\\", os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()):
+    for cand in ("C:\\AI\\build", "C:\\", os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()):
         probe = os.path.join(cand, "vw_probe_tmp")
         try:
             os.makedirs(probe, exist_ok=True)

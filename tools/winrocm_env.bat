@@ -69,4 +69,10 @@ if not defined HIP_PATH (
 )
 set "ROCM_PATH=%HIP_PATH%"
 set "ROCM_HOME=%HIP_PATH%"
+
+rem --- Scratch build dirs: keep them off the drive root when an ASCII location exists ---
+rem C:\vw_cext_build and C:\vw_cext_hip are created here by default (short path: ninja/MSVC
+rem hit the Windows 260-char limit on deep trees). VLLM_WIN_BUILD_ROOT moves them elsewhere;
+rem default to C:\AI\build (the ASCII-first location this fork documents) when unset.
+if not defined VLLM_WIN_BUILD_ROOT if exist "C:\AI\" set "VLLM_WIN_BUILD_ROOT=C:\AI\build"
 exit /b 0
