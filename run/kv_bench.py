@@ -112,6 +112,16 @@ def main() -> None:
         kwargs["calculate_kv_scales"] = True
     if os.environ.get("VLLM_KV_NOCHUNK", "0") == "1":
         kwargs["enable_chunked_prefill"] = False
+    # KVarN's fp16 tail pool is sized from max_num_batched_tokens (pool_slots:
+    # 2*max_num_seqs + prefill_blocks + 8 per layer) and is not counted by
+    # gpu_memory_utilization: the 8192 default OOMs a 16 GiB card on 7-9B
+    # models before the first long-context prefill completes.
+    batched = os.environ.get("VLLM_KV_BATCHED_TOKENS")
+    if batched:
+        kwargs["max_num_batched_tokens"] = int(batched)
+    seqs = os.environ.get("VLLM_KV_MAX_SEQS")
+    if seqs:
+        kwargs["max_num_seqs"] = int(seqs)
     llm = LLM(**kwargs)
     tok = llm.get_tokenizer()
 
