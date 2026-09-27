@@ -30,6 +30,18 @@ OPT-125m, eager mode, `TRITON_ATTN`, single GPU, no custom kernels. KV cache 274
 python first_token.py
 ```
 
+## Local browser chat
+
+With the vLLM server running on `http://127.0.0.1:8000`, start the dependency-free browser
+UI from the repository root in a second terminal:
+
+```powershell
+C:\AI\vllm-venv\Scripts\python .\run\chat_ui.py
+```
+
+Open `http://localhost:8080`. The UI proxies model discovery and chat completion requests to
+vLLM, so no CORS configuration or additional package is needed. Keep both terminals open.
+
 Key runtime config (see `first_token.py`): `enforce_eager=True`, `attention_backend="TRITON_ATTN"`
 (uses Triton reshape_and_cache + attention, avoiding the missing `_rocm_C`/`_C_cache_ops` kernels;
 ROCM_ATTN is the default but needs C kernels), `tensor_parallel_size=1`, and env
