@@ -29,3 +29,6 @@ first_token.log
 bench.log
 pip_*.log
 build_c_ext.log
+
+# internal working notes, no longer tracked
+docs/

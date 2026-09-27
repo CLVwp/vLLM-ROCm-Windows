@@ -111,7 +111,7 @@ cmd /c build_run.bat
 ```
 
 Expected: `BUILD_OK` at the end (about 1 minute). This build is what delivers real GPTQ
-throughput (without it, decode speed collapses; see docs/gfx1101-validation.md).
+throughput (without it, decode speed collapses; see gfx1101-validation.md).
 
 ## Step 6 - First smoke test (2 min)
 
@@ -164,7 +164,7 @@ Ctrl+C to stop everything.
 - **Upstream README** (the second half of this repo's README.md): every advanced feature
   (KVarN KV-quant, CK FMHA prefill, GEMV autotune, batch sweep) and the code
   documentation. This guide only covers setup and basic use.
-- **gfx1101 validation** (docs/gfx1101-validation.md): the full procedure, the 5 bugs
+- **gfx1101 validation** (gfx1101-validation.md): the full procedure, the 5 bugs
   hit and their fixes, benchmark numbers, methodology.
 - **Upcoming optimizations**: hipGraph decode (neutral on this card), torch.compile,
   Triton autotune for gfx1101, fp8 KV cache - follow the repo issues.

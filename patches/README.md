@@ -87,6 +87,6 @@ into `vllm_win_attn_C.pyd` and loaded opt-in by the plugin (`VLLM_WIN_ATTN_NATIV
 
 Result: the native decode kernel is ~3.2x faster than Triton `kernel_paged_attention_2d` in isolation
 and numerically correct, BUT the end-to-end ROCM_ATTN integration REGRESSES (-9% gemma, -5% ERNIE) --
-the path overhead negates the kernel win. See `docs/s5-attention-lever-and-aiter-rdna3.md`. Kept
+the path overhead negates the kernel win. Kept
 because the kernel is the RDNA3-native `fmha_v3` equivalent and the remaining flash-layout-swap path
 would reuse it.
