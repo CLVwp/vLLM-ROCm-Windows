@@ -12,11 +12,14 @@ This is a small-tile GEMV (few output rows per program -> many programs -> the C
 streaming the weight once. Patches UnquantizedLinearMethod.apply for the M==1 decode step only;
 everything else (prefill, M>1) falls through to the original path. Enable VLLM_WIN_BF16_GEMV=1.
 """
+import logging
 import os
 
 import torch
 
 from vllm.triton_utils import tl, triton
+
+logger = logging.getLogger(__name__)
 
 
 @triton.jit
@@ -61,7 +64,7 @@ def patch_unquantized_linear() -> None:
     try:
         from vllm.model_executor.layers.linear import UnquantizedLinearMethod
     except Exception as e:  # noqa: BLE001
-        print("vllm-win bf16_gemv patch warning:", repr(e))
+        logger.warning("bf16_gemv patch warning: %r", e)
         return
     validate = os.environ.get("VLLM_WIN_BF16_GEMV_VALIDATE", "0") == "1"
     _orig = UnquantizedLinearMethod.apply
@@ -85,4 +88,4 @@ def patch_unquantized_linear() -> None:
 
     UnquantizedLinearMethod.apply = apply
     _PATCHED = True
-    print("vllm-win: patched UnquantizedLinearMethod.apply (M=1 bf16 skinny GEMV)")
+    logger.info("patched UnquantizedLinearMethod.apply (M=1 bf16 skinny GEMV)")

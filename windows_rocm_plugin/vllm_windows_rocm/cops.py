@@ -31,9 +31,9 @@ logger = logging.getLogger(__name__)
 _INSTALLED = False
 
 
-def _default_native_dir() -> str:
-    """Where build_c_ext.py drops vllm_win_C.pyd: build_root()/vw_cext_build, resolved with
-    the same logic (VLLM_WIN_BUILD_ROOT, default C:\AI\build, else drive root). Kept in
+def _default_dir(name: str) -> str:
+    """Default home of one native-extension build dir: <build root>/<name>, resolved with
+    the same logic (VLLM_WIN_BUILD_ROOT, default C:/AI/build, else drive root). Kept in
     tools/winrocm_paths.py; duplicated here inline to avoid importing torch-adjacent tools
     at plugin import time."""
     root = (os.environ.get("VLLM_WIN_BUILD_ROOT") or "").strip()
@@ -43,7 +43,11 @@ def _default_native_dir() -> str:
                 root = cand
                 break
         root = root or (os.environ.get("LOCALAPPDATA") or os.getcwd())
-    return os.path.join(root, "vw_cext_build")
+    return os.path.join(root, name)
+
+
+def _default_native_dir() -> str:
+    return _default_dir("vw_cext_build")
 
 
 _NATIVE_DIR = os.environ.get("VLLM_WIN_C_DIR") or _default_native_dir()
@@ -74,7 +78,7 @@ def _load_native() -> str | None:
             torch.ops.load_library(p)
             return p
         except Exception as e:
-            print("vllm-win native _C load_library warning:", repr(e))
+            logger.warning("native _C load_library warning: %r", e)
             # fallback: import as a module (adds nothing extra, but uses Python's loader path)
             try:
                 d = os.path.dirname(p)
@@ -84,7 +88,10 @@ def _load_native() -> str | None:
                 importlib.import_module(os.path.splitext(os.path.basename(p))[0])
                 return p
             except Exception as e2:
-                print("vllm-win native _C import warning:", repr(e2))
+                logger.warning("native _C import warning: %r", e2)
+    logger.warning("no vllm_win_C*.pyd in %s: running with the SLOW torch fallbacks "
+                   "(build it with experiments/vllm_c_ext/build_run.bat, or point "
+                   "VLLM_WIN_C_DIR at your build)", _NATIVE_DIR)
     return None
 
 
@@ -203,16 +210,20 @@ def _install_moe_C() -> None:
     # Native first: its TORCH_LIBRARY(_moe_C) (moe_align_block_size/moe_sum/topk_softmax/
     # batched_moe_align_block_size, real HIP kernels) wins over the torch fallbacks below.
     if os.environ.get("VLLM_WIN_MOE_NATIVE", "1") != "0":
-        moe_dir = os.environ.get("VLLM_WIN_MOE_DIR", r"C:\vw_moe_build")
+        moe_dir = os.environ.get("VLLM_WIN_MOE_DIR") or _default_dir("vw_moe_build")
         for p in sorted(glob.glob(os.path.join(moe_dir, "vllm_win_moe_C*.pyd"))):
             try:
                 torch.ops.load_library(p)
-                print("vllm-win: loaded native _moe_C from", p)
+                logger.info("loaded native _moe_C from %s", p)
                 break
             except Exception as e:  # noqa: BLE001
-                print("vllm-win native _moe_C load warning:", repr(e))
+                logger.warning("native _moe_C load warning: %r", e)
     if hasattr(torch.ops, "_moe_C") and hasattr(torch.ops._moe_C, "moe_align_block_size"):
         return  # native present -> use it, skip torch fallbacks
+    if os.environ.get("VLLM_WIN_MOE_NATIVE", "1") != "0":
+        logger.warning("no vllm_win_moe_C*.pyd found: MoE models need its topk_softmax and the "
+                       "torch fallbacks below cover only moe_align/moe_sum "
+                       "(build: experiments/vllm_c_ext/build_moe_run.bat)")
     lib = torch.library.Library("_moe_C", "FRAGMENT")
     ops = [
         ("moe_align_block_size(Tensor topk_ids, int num_experts, int block_size, "
@@ -300,16 +311,16 @@ def _install_cache_C() -> None:
     # tok/s gap is inconclusive. Re-measure after a GPU/driver reset before flipping this on.
     if os.environ.get("VLLM_WIN_CACHE_NATIVE", "0") != "1":
         return
-    cache_dir = os.environ.get("VLLM_WIN_CACHE_DIR", r"C:\vw_cache_build")
+    cache_dir = os.environ.get("VLLM_WIN_CACHE_DIR") or _default_dir("vw_cache_build")
     for p in sorted(glob.glob(os.path.join(cache_dir, "vllm_win_cache_C*.pyd"))):
         try:
             torch.ops.load_library(p)
             if (hasattr(torch.ops, "_C_cache_ops")
                     and hasattr(torch.ops._C_cache_ops, "reshape_and_cache_flash")):
-                print("vllm-win: loaded native _C_cache_ops (reshape_and_cache_flash) from", p)
+                logger.info("loaded native _C_cache_ops (reshape_and_cache_flash) from %s", p)
                 return
         except Exception as e:  # noqa: BLE001
-            print("vllm-win native _C_cache_ops load warning:", repr(e))
+            logger.warning("native _C_cache_ops load warning: %r", e)
 
 
 _S5_NATIVE_CALLS = [0]
@@ -325,7 +336,7 @@ def _patch_rocm_decode() -> None:
     try:
         import vllm.v1.attention.ops.chunked_prefill_paged_decode as _mod
     except Exception as e:  # noqa: BLE001  (never break plugin init over the patch)
-        print("vllm-win S5 patch skipped (import failed):", repr(e))
+        logger.warning("S5 patch skipped (import failed): %r", e)
         return
     _orig = _mod.chunked_prefill_paged_decode
 
@@ -366,7 +377,7 @@ def _patch_rocm_decode() -> None:
         import vllm.platforms.rocm as _rp
         _rp.use_rocm_custom_paged_attention = lambda *a, **k: False
     except Exception as e:  # noqa: BLE001
-        print("vllm-win S5 use_rocm_custom disable warning:", repr(e))
+        logger.warning("S5 use_rocm_custom disable warning: %r", e)
     # Do NOT import vllm.v1.attention.backends.rocm_attn here: install() can run at plugin/sitecustomize
     # time (before vllm is fully up), and importing the backends module then triggers a circular import
     # that aborts plugin registration (and with it the WNA16 fallback). rocm_attn.py does
@@ -376,7 +387,7 @@ def _patch_rocm_decode() -> None:
     _ra = _sys.modules.get("vllm.v1.attention.backends.rocm_attn")
     if _ra is not None and hasattr(_ra, "chunked_prefill_paged_decode"):
         _ra.chunked_prefill_paged_decode = _wrapper  # already-imported: rebind in place (no import)
-    print("vllm-win: S5 native paged_attention_v1 patched into ROCM_ATTN decode (head_size 128/256)"
+    logger.info("S5 native paged_attention_v1 patched into ROCM_ATTN decode (head_size 128/256)"
           " + use_rocm_custom_paged_attention disabled")
 
 
@@ -386,12 +397,12 @@ def _install_attn_C() -> None:
     Opt-in: needs VLLM_WIN_ATTN_NATIVE=1 AND ROCM_ATTN backend + kv_cache_dtype=auto for the sliding layers."""
     if os.environ.get("VLLM_WIN_ATTN_NATIVE", "0") != "1":
         return
-    attn_dir = os.environ.get("VLLM_WIN_ATTN_DIR", r"C:\vw_attn_build")
+    attn_dir = os.environ.get("VLLM_WIN_ATTN_DIR") or _default_dir("vw_attn_build")
     for p in sorted(glob.glob(os.path.join(attn_dir, "vllm_win_attn_C*.pyd"))):
         try:
             torch.ops.load_library(p)
             if hasattr(torch.ops._C, "paged_attention_v1"):
-                print("vllm-win: loaded native _C.paged_attention_v1 from", p)
+                logger.info("loaded native _C.paged_attention_v1 from %s", p)
                 # NOTE: do NOT monkeypatch here. install() runs during plugin register() while vllm is
                 # mid-import; importing chunked_prefill_paged_decode now triggers a circular import that
                 # aborts plugin registration (killing the WNA16 fallback). If the ops module is already
@@ -401,7 +412,7 @@ def _install_attn_C() -> None:
                     _patch_rocm_decode()
                 return
         except Exception as e:  # noqa: BLE001
-            print("vllm-win native _C attn load warning:", repr(e))
+            logger.warning("native _C attn load warning: %r", e)
 
 
 def maybe_patch_s5_decode() -> None:
@@ -411,7 +422,7 @@ def maybe_patch_s5_decode() -> None:
     if os.environ.get("VLLM_WIN_ATTN_NATIVE", "0") != "1":
         return
     if not (hasattr(torch.ops, "_C") and hasattr(torch.ops._C, "paged_attention_v1")):
-        print("vllm-win: S5 patch skipped (native paged_attention_v1 not loaded)")
+        logger.warning("S5 patch skipped (native paged_attention_v1 not loaded)")
         return
     _patch_rocm_decode()
 
@@ -434,7 +445,7 @@ def maybe_patch_flash_decode() -> None:
     VLLM_WIN_FLASH_ATTN=1. Call AFTER `from vllm import LLM`, BEFORE LLM(...)."""
     if os.environ.get("VLLM_WIN_FLASH_ATTN", "0") != "1":
         return
-    d = os.environ.get("VLLM_WIN_FLASH_DIR", r"C:\vw_attnflash_build")
+    d = os.environ.get("VLLM_WIN_FLASH_DIR") or _default_dir("vw_attnflash_build")
     loaded = hasattr(torch.ops, "_C") and hasattr(torch.ops._C, "paged_attention_flash")
     if not loaded:
         for p in sorted(glob.glob(os.path.join(d, "vllm_win_attn_flash_C*.pyd"))):
@@ -442,17 +453,17 @@ def maybe_patch_flash_decode() -> None:
                 torch.ops.load_library(p)
                 if hasattr(torch.ops._C, "paged_attention_flash"):
                     loaded = True
-                    print("vllm-win: loaded native _C.paged_attention_flash from", p)
+                    logger.info("loaded native _C.paged_attention_flash from %s", p)
                     break
             except Exception as e:  # noqa: BLE001
-                print("vllm-win flash load warning:", repr(e))
+                logger.warning("flash load warning: %r", e)
     if not loaded:
-        print("vllm-win: flash patch skipped (paged_attention_flash not loaded)")
+        logger.warning("flash patch skipped (paged_attention_flash not loaded)")
         return
     try:
         import vllm.v1.attention.ops.triton_unified_attention as _mod
     except Exception as e:  # noqa: BLE001
-        print("vllm-win flash patch skipped (import failed):", repr(e))
+        logger.warning("flash patch skipped (import failed): %r", e)
         return
     _orig = _mod.unified_attention
 
@@ -482,7 +493,7 @@ def maybe_patch_flash_decode() -> None:
     _ta = sys.modules.get("vllm.v1.attention.backends.triton_attn")
     if _ta is not None and hasattr(_ta, "unified_attention"):
         _ta.unified_attention = _wrap
-    print("vllm-win: flash decode patched into unified_attention (head 128/256, pure decode)")
+    logger.info("flash decode patched into unified_attention (head 128/256, pure decode)")
 
 
 def maybe_patch_ck_prefill() -> None:
@@ -497,7 +508,7 @@ def maybe_patch_ck_prefill() -> None:
     if os.environ.get("VLLM_WIN_CK_PREFILL", "0") != "1":
         return
     if _CK_VARLEN[0] is None:
-        d = os.environ.get("VLLM_WIN_CKVARLEN_DIR", r"C:\vw_ckvarlen_build")
+        d = os.environ.get("VLLM_WIN_CKVARLEN_DIR") or _default_dir("vw_ckvarlen_build")
         for hp in (os.path.join(_hip_root(), "bin"), os.path.join(_hip_root(), "lib"), d):
             try:
                 os.add_dll_directory(hp)
@@ -508,15 +519,15 @@ def maybe_patch_ck_prefill() -> None:
         try:
             import ck_fmha_varlen_C as _ckmod
             _CK_VARLEN[0] = _ckmod
-            print("vllm-win: loaded CK varlen FMHA from", d)
+            logger.info("loaded CK varlen FMHA from %s", d)
         except Exception as e:  # noqa: BLE001
-            print("vllm-win CK prefill patch skipped (import failed):", repr(e))
+            logger.warning("CK prefill patch skipped (import failed): %r", e)
             return
     try:
         import vllm.v1.attention.backends.triton_attn as _mod
         _Impl = _mod.TritonAttentionImpl
     except Exception as e:  # noqa: BLE001
-        print("vllm-win CK prefill patch skipped (import failed):", repr(e))
+        logger.warning("CK prefill patch skipped (import failed): %r", e)
         return
     if getattr(_Impl.forward, "_ck_wrapped", False):
         return
@@ -584,7 +595,7 @@ def maybe_patch_ck_prefill() -> None:
 
     _forward._ck_wrapped = True
     _Impl.forward = _forward
-    print("vllm-win: CK varlen FMHA patched into TritonAttentionImpl.forward (pure prefill, head 128, fp16/bf16)")
+    logger.info("CK varlen FMHA patched into TritonAttentionImpl.forward (pure prefill, head 128, fp16/bf16)")
 
 
 def install() -> None:
@@ -617,7 +628,7 @@ def install() -> None:
         try:
             lib.define(schema)
         except Exception as e:  # noqa: BLE001
-            print("vllm-win cops stub define warning:", name, repr(e))
+            logger.warning("cops stub define warning: %s %r", name, e)
             continue
         # Only register CUDA: vLLM adds its own register_fake (Meta) for the tensor-returning
         # ops (e.g. scaled_fp4_quant); registering Meta here would collide. CUDA-only means an

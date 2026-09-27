@@ -19,8 +19,11 @@ and otherwise fail on silently:
   it is ASCII, else <system drive>\\vllm_win_tmp) fixes every temp-path failure seen so
   far. A warning is printed when no ASCII option is found.
 """
+import logging
 import os
 import tempfile
+
+logger = logging.getLogger(__name__)
 
 from .torchdist_shim import apply
 
@@ -79,11 +82,11 @@ def _ensure_ascii_tmp() -> None:
             continue
         for var in ("TMP", "TEMP", "TMPDIR"):
             os.environ[var] = target
-        print(f"vllm-win: TMP/TEMP was under a non-ASCII path ({cur}); "
-              f"redirected to {target} (non-ASCII paths break native DLL/JIT compilation).")
+        logger.warning("TMP/TEMP was under a non-ASCII path (%s); redirected to %s "
+                       "(non-ASCII paths break native DLL/JIT compilation)", cur, target)
         return
-    print("vllm-win WARNING: TMP/TEMP is under a non-ASCII path and no ASCII fallback was "
-          "found; triton JIT compilation may fail. Set TMP/TEMP to an ASCII directory.")
+    logger.warning("TMP/TEMP is under a non-ASCII path and no ASCII fallback was found; "
+                   "triton JIT compilation may fail. Set TMP/TEMP to an ASCII directory.")
 
 
 _ensure_rocm_home()

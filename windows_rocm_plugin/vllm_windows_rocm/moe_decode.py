@@ -16,11 +16,16 @@ Symmetric int4 (bias 8). Gate/up are fused on dim 0 of w13 (first I = gate, next
 
 Enable with VLLM_WIN_MOE_DECODE=1; VLLM_WIN_MOE_VALIDATE=1 compares vs fused_experts (eager).
 """
+import logging
 import os
 
 import torch
 
 from vllm.triton_utils import tl, triton
+
+logger = logging.getLogger(__name__)
+
+from .cops import _default_dir  # noqa: E402  (same package; cops has no plugin imports)
 
 _BIAS = 8.0
 
@@ -122,16 +127,16 @@ def _load_hip_moe():
     if os.environ.get("VLLM_WIN_MOE_HIP", "0") != "1":
         return
     import glob
-    d = os.environ.get("VLLM_WIN_MOE_HIP_DIR", r"C:\vw_moedev_build")
+    d = os.environ.get("VLLM_WIN_MOE_HIP_DIR") or _default_dir("vw_moedev_build")
     for p in sorted(glob.glob(os.path.join(d, "*.pyd"))):
         try:
             torch.ops.load_library(p)
             if hasattr(torch.ops, "vllm_win_moe") and hasattr(torch.ops.vllm_win_moe, "moe_decode_w4"):
                 _HIP_MOE = True
-                print("vllm-win: loaded native HIP MoE-decode kernel from", p)
+                logger.info("loaded native HIP MoE-decode kernel from %s", p)
                 return
         except Exception as e:  # noqa: BLE001
-            print("vllm-win HIP MoE load warning:", repr(e))
+            logger.warning("HIP MoE load warning: %r", e)
 
 
 _PATCHED = False
@@ -146,7 +151,7 @@ def patch_moe() -> None:
             CompressedTensorsWNA16MoEMethod,
         )
     except Exception as e:  # noqa: BLE001
-        print("vllm-win moe_decode patch warning:", repr(e))
+        logger.warning("moe_decode patch warning: %r", e)
         return
     _load_hip_moe()
     validate = os.environ.get("VLLM_WIN_MOE_VALIDATE", "0") == "1"
@@ -169,4 +174,4 @@ def patch_moe() -> None:
 
     CompressedTensorsWNA16MoEMethod.apply = apply
     _PATCHED = True
-    print("vllm-win: patched CompressedTensorsWNA16MoEMethod.apply (M=1 MoE decode GEMV)")
+    logger.info("patched CompressedTensorsWNA16MoEMethod.apply (M=1 MoE decode GEMV)")

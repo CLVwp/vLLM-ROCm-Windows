@@ -18,12 +18,17 @@ kernel consumes conch's exact post-process layout:
 Dequant (conch SYMMETRIC_WITH_SHIFT, weight_bias=0 for uint4): w[k,n] = (q(k,n) - z(g,n))*s(g,n).
 Validated by token-agreement vs conch on the real model (run/precision_check.py).
 """
+import logging
 import os
 import sys
 
 import torch
 
 from vllm.triton_utils import tl, triton
+
+logger = logging.getLogger(__name__)
+
+from .cops import _default_dir  # noqa: E402  (same package; cops has no plugin imports)
 
 # Optional hand-written HIP GEMV (buffer_load dwordx4 + U=8 unroll + split-K) -- beats the Triton
 # kernel on every shape cache-cold (o 24->36%, qkv 33->52%, down 35->61%, gate 67->71% of DRAM).
@@ -44,16 +49,16 @@ def _load_hip_gemv():
     # than its bandwidth edge. Needs an atomic-free direct-write path to win e2e. Triton is default.
     if os.environ.get("VLLM_WIN_HIPGEMV", "0") != "1":
         return
-    d = os.environ.get("VLLM_WIN_HIPGEMV_DIR", r"C:\vw_hipgemv_build\gemv_w4_hip")
+    d = os.environ.get("VLLM_WIN_HIPGEMV_DIR") or os.path.join(_default_dir("vw_hipgemv_build"), "gemv_w4_hip")
     try:
         if d not in sys.path:
             sys.path.insert(0, d)
         import gemv_w4_hip  # noqa: F401  -- import triggers the TORCH_LIBRARY(vllm_win_hip) static init
         _ = torch.ops.vllm_win_hip.gemv_w4  # ensure the op resolved
         _HIP_OK = True
-        print("vllm-win: loaded native HIP W4 GEMV (torch.ops.vllm_win_hip.gemv_w4) from", d)
+        logger.info("loaded native HIP W4 GEMV (torch.ops.vllm_win_hip.gemv_w4) from %s", d)
     except Exception as e:  # noqa: BLE001
-        print("vllm-win HIP GEMV not available, using Triton:", repr(e))
+        logger.warning("HIP GEMV not available, using Triton: %r", e)
 
 
 @triton.autotune(
@@ -302,12 +307,12 @@ def register() -> None:
         from . import moe_decode
         moe_decode.patch_moe()  # opt-in M=1 MoE-decode GEMV (VLLM_WIN_MOE_DECODE=1)
     except Exception as e:  # noqa: BLE001
-        print("vllm-win moe_decode wire warning:", repr(e))
+        logger.warning("moe_decode wire warning: %r", e)
     try:
         from . import bf16_gemv
         bf16_gemv.patch_unquantized_linear()  # opt-in M=1 dense bf16 GEMV (VLLM_WIN_BF16_GEMV=1)
     except Exception as e:  # noqa: BLE001
-        print("vllm-win bf16_gemv wire warning:", repr(e))
+        logger.warning("bf16_gemv wire warning: %r", e)
     try:
         # Native _rocm_C skinny GEMMs (LLMM1 + wvSplitK), built 1:1 from csrc/rocm/skinny_gemms.cu.
         # Loading registers torch.ops._rocm_C.*; with VLLM_ROCM_USE_SKINNY_GEMM=1, vLLM's
@@ -315,14 +320,14 @@ def register() -> None:
         if os.environ.get("VLLM_WIN_ROCM_C", "0") == "1":
             import glob
             import torch
-            d = os.environ.get("VLLM_WIN_ROCM_C_DIR", r"C:\vw_rocmc_build")
+            d = os.environ.get("VLLM_WIN_ROCM_C_DIR") or _default_dir("vw_rocmc_build")
             for p in sorted(glob.glob(os.path.join(d, "*.pyd"))):
                 torch.ops.load_library(p)
                 if hasattr(torch.ops, "_rocm_C") and hasattr(torch.ops._rocm_C, "wvSplitK"):
-                    print("vllm-win: loaded native _rocm_C skinny GEMM from", p)
+                    logger.info("loaded native _rocm_C skinny GEMM from %s", p)
                     break
     except Exception as e:  # noqa: BLE001
-        print("vllm-win _rocm_C load warning:", repr(e))
+        logger.warning("_rocm_C load warning: %r", e)
     try:
         from vllm.model_executor.kernels.linear import _POSSIBLE_KERNELS
         from vllm.platforms import PlatformEnum
@@ -336,6 +341,6 @@ def register() -> None:
         if dq not in lst:
             lst.append(dq)
         _REGISTERED = True
-        print("vllm-win: registered WinRocmAwqGemvKernel (front) + W4A16 dequant fallback (last)")
+        logger.info("registered WinRocmAwqGemvKernel (front) + W4A16 dequant fallback (last)")
     except Exception as e:  # noqa: BLE001
-        print("vllm-win awq_gemv register warning:", repr(e))
+        logger.warning("awq_gemv register warning: %r", e)
