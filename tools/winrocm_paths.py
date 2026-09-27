@@ -175,7 +175,13 @@ def build_root() -> str:
     if v:
         os.makedirs(v, exist_ok=True)
         return v
-    for cand in ("C:\\AI\\build", "C:\\", os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()):
+    cands = ["C:\\", os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()]
+    if os.path.isdir("C:\\AI"):
+        # Adopt the ASCII-first layout only when C:\AI already exists (matching the .bat
+        # guard): the makedirs probe below is recursive and would otherwise silently create
+        # C:\AI\build on every machine and migrate its future builds there.
+        cands.insert(0, "C:\\AI\\build")
+    for cand in cands:
         probe = os.path.join(cand, "vw_probe_tmp")
         try:
             os.makedirs(probe, exist_ok=True)
