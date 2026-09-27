@@ -75,12 +75,52 @@ def apply_source_patches(vllm_root: str) -> int:
     return 1 if failures else 0
 
 
+def install_sitecustomize(venv_site: str) -> None:
+    """Copy sitecustomize.py into site-packages so EVERY interpreter start (including
+    vLLM's model-inspection subprocess `python -m vllm.model_executor.models.registry`,
+    which does not load the platform plugin) applies the torch.distributed shim.
+    Without it, `vllm serve` fails on un-cached architectures with
+    ModuleNotFoundError: torch._C._distributed_c10d. Idempotent by content hash."""
+    src = os.path.join(_repo_root(), "windows_rocm_plugin", "sitecustomize.py")
+    if not os.path.isfile(src):
+        print(f"notice: {src} not found; skipping sitecustomize install")
+        return
+    dst = os.path.join(venv_site, "sitecustomize.py")
+    try:
+        same = os.path.isfile(dst) and open(src, "rb").read() == open(dst, "rb").read()
+    except OSError:
+        same = False
+    if same:
+        print("sitecustomize: already installed")
+        return
+    try:
+        import shutil
+
+        shutil.copyfile(src, dst)
+        print(f"sitecustomize: installed to {dst}")
+    except OSError as e:
+        print(f"notice: could not install sitecustomize ({e}); `vllm serve` may fail on "
+              "model-architecture inspection. Copy windows_rocm_plugin/sitecustomize.py "
+              "to your venv's site-packages manually.")
+
+
+def _venv_site_packages() -> str | None:
+    """site-packages of the python running this script (venv or not)."""
+    import sysconfig
+
+    p = sysconfig.get_paths().get("purelib")
+    return p
+
+
 def main(argv):
     vllm_root = argv[0] if argv else "vllm"
     init_py = os.path.join(vllm_root, "vllm", "__init__.py")
     if not os.path.isfile(init_py):
         print(f"not found: {init_py}", file=sys.stderr)
         return 1
+    site = _venv_site_packages()
+    if site:
+        install_sitecustomize(site)
     src = open(init_py, encoding="utf-8").read()
     if MARK in src:
         print("already patched")
