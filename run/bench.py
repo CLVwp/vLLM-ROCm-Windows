@@ -41,6 +41,7 @@ KVDTYPE = os.environ.get("VLLM_BENCH_KVDTYPE") or "auto"
 GIB = 2 ** 30
 
 torch.cuda.reset_peak_memory_stats()
+torch.cuda.set_device(0)  # before any context-creating call: HIP_VISIBLE_DEVICES remaps the dGPU to 0
 free0, total = torch.cuda.mem_get_info()
 print(f"== {MODEL} | backend={BACKEND} quant={QUANT} | GPU {total/GIB:.1f} GiB, free {free0/GIB:.1f} GiB")
 
