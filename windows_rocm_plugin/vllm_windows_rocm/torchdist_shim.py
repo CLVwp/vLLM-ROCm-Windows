@@ -16,6 +16,7 @@ NOT provide real multi-process communication (that needs RCCL/gloo, unavailable 
 
 Apply as early as possible (a .pth startup hook calls apply() before any `import vllm`).
 """
+import os
 import sys
 import types
 from datetime import timedelta
@@ -502,8 +503,9 @@ def apply() -> None:
             return tuple(global_shape), tuple(0 for _ in global_shape)
 
         umod.compute_local_shape_and_global_offset = _compute_local_shape_and_global_offset
-        sys.modules["torch.distributed.tensor._utils"] = umod
-        tmod._utils = umod
+        if os.environ.get("VLLM_WIN_DTENSOR_UTILS", "1") != "0":  # =0: bisect switch
+            sys.modules["torch.distributed.tensor._utils"] = umod
+            tmod._utils = umod
 
     _install_amdsmi_stub(torch)
     _install_uvloop_stub()
