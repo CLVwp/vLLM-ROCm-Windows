@@ -40,6 +40,12 @@ each model. All weights are 4-bit; KV cache fp16 unless noted.
 | `sahilchachra/Qwythos-9B-Claude-Mythos-5-1M-AWQ` (Qwen3.5 hybrid, 9B) | compressed-tensors W4A16 | **61.7** | — | native exllama + hipGraph, **`gpu_memory_utilization=0.7`** (see note) |
 | `casperhansen/deepseek-r1-distill-qwen-14b-awq` (dense, 14B) | AWQ Int4 | **50.3** | — | custom M=1 W4 GEMV, autotuned, util 0.9 (spill-verified clean) |
 
+**Community-validated hardware.** RX 7800 XT (`gfx1101`, 60 CU, ~624 GB/s): **81.9 tok/s** on
+Qwen2.5-7B-GPTQ, validated end-to-end by [@CLVwp](https://github.com/CLVwp)
+([#6](https://github.com/ThePie88/vLLM-ROCm-Windows/issues/6)) -- consistent with the bandwidth ratio to
+the 7900 XT's 115 (decode is memory-bound). `vllm serve` plus the local chat UI (`run/chat_ui.py`) were
+validated on the same card.
+
 Numbers re-measured 2026-07-02, cudagraph (`FULL_DECODE_ONLY`) decode, and **verified spill-free** by
 polling the Windows GPU shared-memory counter during the run (peak shared == the ~0.76 GiB desktop
 baseline). `torch.cuda.mem_get_info()` only reports *dedicated* VRAM free, so it does NOT catch a WDDM
