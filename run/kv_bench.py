@@ -139,6 +139,9 @@ def main() -> None:
     seqs = os.environ.get("VLLM_KV_MAX_SEQS")
     if seqs:
         kwargs["max_num_seqs"] = int(seqs)
+    blk = os.environ.get("VLLM_KV_BLOCK_SIZE")
+    if blk:
+        kwargs["block_size"] = int(blk)
     llm = LLM(**kwargs)
     tok = llm.get_tokenizer()
     # Warm-up: JIT/autotune every kernel once on a short prompt so the first measured
