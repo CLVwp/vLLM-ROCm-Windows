@@ -182,6 +182,14 @@ tile is ~20x off memory bandwidth for a single decode row. The GEMV is a true re
 (M>1) back to `conch`; it is `@triton.autotune`d per shape (BLOCK_N/num_warps). On
 `casperhansen/deepseek-r1-distill-qwen-14b-awq` it takes decode from 12.2 to 50.9 tok/s.
 
+Two siblings in the same family: `bf16_gemv.py` patches `UnquantizedLinearMethod.apply` with a
+small-tile skinny bf16/fp16 GEMV for the M==1 decode step only (`VLLM_WIN_BF16_GEMV=1`) — the
+unquantized dense MLP of a hybrid MoE is the biggest per-token weight consumer, and rocBLAS
+under-utilises the CUs at M=1 on these shapes. And `moe_decode.py` replaces vLLM's fused-experts
+sort/align/grouped-GEMM machinery with a direct loop over the top-k active experts (streaming
+W4A16 dequant-GEMV in the `moe_wna16` layout) — that is the "+M=1 MoE-decode gather-GEMV" gain
+in the ERNIE row of the performance table above.
+
 ### CK ck_tile FMHA (WMMA) for prefill
 
 `experiments/ck_fmha/` builds a native **Composable Kernel `ck_tile` flash-attention** (forward, d128,
@@ -294,6 +302,9 @@ python kv_scale_probe.py     :: per-layer amplitudes, per-channel K map, layer d
 python kv_quant_schemes.py   :: offline KV quantization-format comparison on a probe dump
 python kv_pc_kernel_check.py :: direct bit-exact check of the fp8 per-channel-scale Triton kernels
 ```
+
+This is the shortlist — the complete script table (incl. `chat_ui.py`, `precision_check.py`,
+`profile_decode.py`, `test_compile.py`, `s5_bench/`) lives in [`run/README.md`](run/README.md).
 
 `bench.py` knobs (env): `VLLM_BENCH_COMPILE=1` enables inductor, `VLLM_BENCH_CGMODE=FULL_DECODE_ONLY`
 enables hipGraph decode capture, `VLLM_DISABLED_KERNELS=ConchLinearKernel` selects the native
