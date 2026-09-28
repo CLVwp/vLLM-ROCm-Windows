@@ -12,6 +12,14 @@ Modes:
                                 layers and positions: median / p95 / count above 100 / top
                                 pairs. On Qwen2.5 a handful of channels carry |K| ~ 420 while
                                 the median sits around 3 (the k_proj bias, rotated by RoPE).
+  VLLM_KV_PROBE_MEAN=<path>     calibrate per-layer K offsets for the fp8 KV fix (issue #28):
+                                two sweeps of the context list; sweep 1 accumulates the
+                                per-(layer, kv head, channel) mean of K, sweep 2 measures
+                                max|K - mean| (the residual the cache actually stores).
+                                Saves {"model", "offsets": {layer: [Hk, D]}, "k_scales":
+                                {layer: max|residual|/448}} for VLLM_WIN_KV_OFFSETS. The mean
+                                is subtracted at store time and never added back: q·mean is
+                                constant per query, so it cancels in the softmax (issue #28).
   VLLM_KV_PROBE_DUMP=<path>     save q/k/v (fp16, CPU) of one layer at the LAST context length
                                 for offline quantization experiments; the layer index is
                                 VLLM_KV_PROBE_DUMP_LAYER (default 0). The tensors are what the
@@ -45,6 +53,7 @@ OUT = os.environ.get("VLLM_KV_PROBE_OUT", os.path.join(tempfile.gettempdir(), "k
 UTIL = float(os.environ.get("VLLM_KV_UTIL", "0.6"))
 TRUST = os.environ.get("VLLM_KV_TRUST", "0") == "1"
 PER_CHANNEL = os.environ.get("VLLM_KV_PROBE_PER_CHANNEL", "0") == "1"
+MEAN = os.environ.get("VLLM_KV_PROBE_MEAN", "")
 DUMP = os.environ.get("VLLM_KV_PROBE_DUMP", "")
 DUMP_LAYER = int(os.environ.get("VLLM_KV_PROBE_DUMP_LAYER", "0"))
 FP8_MAX = 448.0
@@ -86,10 +95,32 @@ def main() -> None:
     stats: dict = {}          # layer index -> [max|Q|, max|K|, max|V|]
     chan_max: list = [None]   # [Hk, D] running max of |K| over layers and positions
     dump: dict = {}
+    # MEAN calibration (issue #28): pass 1 sums K per (layer, head, channel),
+    # pass 2 measures the residual max|K - mean| the cache will actually store.
+    sums: dict = {}
+    cnts: dict = {}
+    mus: dict = {}
+    res_max: dict = {}
+    mean_pass = [0]
 
     def patched_forward(self_impl, layer, query, key, value, *a, **kw):
         if key is not None and value is not None:
             li = _layer_index(layer, self_impl)
+            mp = mean_pass[0]
+            # skip the engine's dummy profiling run (attn_metadata is None): its
+            # synthetic K would corrupt a mean, the max probes tolerate it
+            amd = a[1] if len(a) > 1 else kw.get("attn_metadata")
+            if MEAN and mp and li >= 0 and amd is not None:
+                Hk, D = key.shape[-2], key.shape[-1]
+                kr = key.reshape(-1, Hk, D).float()
+                if mp == 1:
+                    s = sums.get(li)
+                    sums[li] = kr.sum(0) if s is None else s + kr.sum(0)
+                    cnts[li] = cnts.get(li, 0) + kr.shape[0]
+                else:
+                    rm = (kr - mus[li]).abs().amax(dim=0)
+                    prev = res_max.get(li)
+                    res_max[li] = rm if prev is None else torch.maximum(prev, rm)
             q_m = query.abs().max().item()
             k_m = key.abs().max().item()
             v_m = value.abs().max().item()
@@ -106,14 +137,26 @@ def main() -> None:
         return orig_forward(self_impl, layer, query, key, value, *a, **kw)
 
     results = {}
+    texts = {}
+    for ctx in CTXS:
+        reps = max(1, math.ceil(ctx / 78)) + 1
+        text = FILLER * reps + QUESTION
+        ids = tok.encode(text)
+        if len(ids) > ctx:
+            text = tok.decode(ids[: ctx - 8]) + QUESTION
+        texts[ctx] = text
     TritonAttentionImpl.forward = patched_forward
     try:
+        if MEAN:
+            mean_pass[0] = 1
+            for ctx in CTXS:
+                llm.generate([texts[ctx]], sp(max_tokens=1, ignore_eos=True))
+            for li, s in sums.items():
+                mus[li] = s / cnts[li]
+            sums.clear()
+            mean_pass[0] = 2
         for ctx in CTXS:
-            reps = max(1, math.ceil(ctx / 78)) + 1
-            text = FILLER * reps + QUESTION
-            ids = tok.encode(text)
-            if len(ids) > ctx:
-                text = tok.decode(ids[: ctx - 8]) + QUESTION
+            text = texts[ctx]
             stats.clear()
             dump.clear()
             if DUMP and ctx == CTXS[-1]:
@@ -144,6 +187,19 @@ def main() -> None:
                       f"v{tuple(dump['v'].shape)} at ctx {ctx} -> {DUMP}")
     finally:
         TritonAttentionImpl.forward = orig_forward
+
+    if MEAN:
+        out = {
+            "model": MODEL,
+            "offsets": {li: mu.detach().cpu() for li, mu in mus.items()},
+            "k_scales": {li: float(res_max[li].amax() / FP8_MAX)
+                         for li in mus if li in res_max},
+        }
+        torch.save(out, MEAN)
+        top = sorted(out["k_scales"].items(), key=lambda kv: -kv[1])[:5]
+        print("k_scales (max|K-mean|/448) top layers:",
+              ", ".join(f"{li} ({v:.4f})" for li, v in top))
+        print(f"saved K offsets for {len(mus)} layers -> {MEAN}")
 
     if PER_CHANNEL and chan_max[0] is not None:
         cm = chan_max[0]

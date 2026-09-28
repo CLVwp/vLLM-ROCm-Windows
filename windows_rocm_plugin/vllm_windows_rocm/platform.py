@@ -152,3 +152,11 @@ class WindowsRocmPlatform(RocmPlatform):
             kv_scales.register()
         except Exception as e:  # noqa: BLE001
             print("vllm-win kv_scales register warning:", repr(e))
+        # Optional per-layer K offset removal for fp8 KV (VLLM_WIN_KV_OFFSETS,
+        # issue #28). No-op unless the env var is set. Do not combine with
+        # VLLM_WIN_KV_KSCALE: both overwrite _k_scale.
+        try:
+            from . import kv_offsets
+            kv_offsets.register()
+        except Exception as e:  # noqa: BLE001
+            print("vllm-win kv_offsets register warning:", repr(e))
