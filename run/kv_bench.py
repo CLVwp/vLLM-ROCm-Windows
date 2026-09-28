@@ -22,6 +22,7 @@ Environment:
   VLLM_KV_BACKEND   attention backend (default TRITON_ATTN)
   VLLM_KV_UTIL      gpu_memory_utilization (default 0.6)
   VLLM_KV_TRUST     1 -> trust_remote_code=True (default 0)
+  VLLM_KV_BLOCK_SIZE block_size for the LLM (e.g. 128 for KVarN; default: vLLM's)
   VLLM_KV_OUT       JSONL output path (default <temp dir>/kv_results.jsonl)
   VLLM_KV_REF       fp16 reference JSON written by the auto run and read by
                     later runs for the drift check (default <temp dir>/kv_ref.json)

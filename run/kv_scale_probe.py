@@ -1,12 +1,24 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2026 CLVwp contributors
-"""Measure real K/V amplitude per layer at several context lengths.
+"""Measure real Q/K/V amplitudes per layer at several context lengths.
 
-Purpose: decide the right STATIC k_scale/v_scale for fp8 KV cache on a model
-whose checkpoint ships no scales (Qwen2.5-7B-Instruct-GPTQ-Int4). For each
-attention layer we run one forward with a filler prompt of N tokens and
-record max|K| / max|V| per layer, then compare against the KV fp8 e4m3
-representable range (448) to derive a safe static scale per context budget.
+Purpose: see what an fp8 (or any low-bit) KV cache has to represent on a model whose
+checkpoint ships no scales (Qwen2.5-7B-Instruct-GPTQ-Int4). For each attention layer we
+run one forward with a filler prompt of N tokens and record max|Q|, max|K|, max|V|, then
+compare K/V against the fp8 e4m3 representable range (448).
+
+Modes:
+  VLLM_KV_PROBE_PER_CHANNEL=1   also record max|K| per (kv head, channel), accumulated over
+                                layers and positions: median / p95 / count above 100 / top
+                                pairs. On Qwen2.5 a handful of channels carry |K| ~ 420 while
+                                the median sits around 3 (the k_proj bias, rotated by RoPE).
+  VLLM_KV_PROBE_DUMP=<path>     save q/k/v (fp16, CPU) of one layer at the LAST context length
+                                for offline quantization experiments; the layer index is
+                                VLLM_KV_PROBE_DUMP_LAYER (default 0). The tensors are what the
+                                attention backend receives for that step, i.e. after RoPE and
+                                before any cache quantization; keep that context length at or
+                                below max_num_batched_tokens (8192 by default) or only the
+                                last prefill chunk is captured.
 
 Usage:
   python kv_scale_probe.py            # uses VLLM_KV_CTXS / VLLM_KV_MODEL / VLLM_KV_UTIL /
@@ -16,6 +28,7 @@ Usage:
 import json
 import math
 import os
+import re
 import tempfile
 
 # MUST be set before importing vllm: keep the engine in-process so the
@@ -31,6 +44,10 @@ CTXS = [int(c) for c in os.environ.get("VLLM_KV_CTXS", "128,2048,8192,16384").sp
 OUT = os.environ.get("VLLM_KV_PROBE_OUT", os.path.join(tempfile.gettempdir(), "kv_scale_probe.json"))
 UTIL = float(os.environ.get("VLLM_KV_UTIL", "0.6"))
 TRUST = os.environ.get("VLLM_KV_TRUST", "0") == "1"
+PER_CHANNEL = os.environ.get("VLLM_KV_PROBE_PER_CHANNEL", "0") == "1"
+DUMP = os.environ.get("VLLM_KV_PROBE_DUMP", "")
+DUMP_LAYER = int(os.environ.get("VLLM_KV_PROBE_DUMP_LAYER", "0"))
+FP8_MAX = 448.0
 
 FILLER = (
     "The history of GPU computing begins in the late 1990s when fixed function "
@@ -43,6 +60,12 @@ FILLER = (
 QUESTION = "\n\nSummarize the text above."
 
 
+def _layer_index(layer, impl) -> int:
+    name = getattr(layer, "layer_name", None) or getattr(impl, "layer_name", "") or ""
+    m = re.search(r"\.(\d+)\.", str(name))
+    return int(m.group(1)) if m else -1
+
+
 def main() -> None:
     llm = LLM(
         model=MODEL, dtype="float16", attention_backend="TRITON_ATTN",
@@ -52,48 +75,94 @@ def main() -> None:
     )
     tok = llm.get_tokenizer()
 
+    # Hook the backend impl itself: TritonAttentionImpl.forward(self, layer, query, key, value,
+    # kv_cache, attn_metadata, ...) receives the raw q/k/v for every layer, regardless of how the
+    # layer dispatches (direct call vs opaque custom op). The `layer` argument comes first: an
+    # earlier version of this probe bound (query, key, value) one slot too early and reported
+    # max|Q| as "K" and max|K| as "V" (issue #25).
+    from vllm.v1.attention.backends.triton_attn import TritonAttentionImpl
+
+    orig_forward = TritonAttentionImpl.forward
+    stats: dict = {}          # layer index -> [max|Q|, max|K|, max|V|]
+    chan_max: list = [None]   # [Hk, D] running max of |K| over layers and positions
+    dump: dict = {}
+
+    def patched_forward(self_impl, layer, query, key, value, *a, **kw):
+        if key is not None and value is not None:
+            li = _layer_index(layer, self_impl)
+            q_m = query.abs().max().item()
+            k_m = key.abs().max().item()
+            v_m = value.abs().max().item()
+            prev = stats.get(li, [0.0, 0.0, 0.0])
+            stats[li] = [max(prev[0], q_m), max(prev[1], k_m), max(prev[2], v_m)]
+            if PER_CHANNEL:
+                Hk, D = key.shape[-2], key.shape[-1]
+                cm = key.reshape(-1, Hk, D).abs().amax(dim=0).float()   # [Hk, D]
+                chan_max[0] = cm if chan_max[0] is None else torch.maximum(chan_max[0], cm)
+            if dump.get("want") and li == DUMP_LAYER:
+                dump["q"] = query.detach().to(torch.float16).cpu()
+                dump["k"] = key.detach().to(torch.float16).cpu()
+                dump["v"] = value.detach().to(torch.float16).cpu()
+        return orig_forward(self_impl, layer, query, key, value, *a, **kw)
+
     results = {}
-    for ctx in CTXS:
-        reps = max(1, math.ceil(ctx / 78)) + 1
-        text = FILLER * reps + QUESTION
-        ids = tok.encode(text)
-        if len(ids) > ctx:
-            text = tok.decode(ids[: ctx - 8]) + QUESTION
-        llm.generate([text], sp(max_tokens=1, ignore_eos=True))
-
-        # walk the registered attention layers via the forward context hook:
-        # after generate() the weights are in place; capture K/V by re-running
-        # one layer forward is invasive, so instead hook the scale tensors the
-        # same way calc_kv_scales does: monkey-patch once, rerun the prompt.
-        kmax = {}
-
-        # Hook the backend impl itself: TritonAttentionImpl.forward receives
-        # the raw (q, k, v) for every layer, regardless of how the layer
-        # dispatches (direct call vs opaque custom op).
-        from vllm.v1.attention.backends.triton_attn import TritonAttentionImpl
-
-        orig_forward = TritonAttentionImpl.forward
-
-        def patched_forward(self_impl, query, key, value, *a, **kw):
-            if key is not None and value is not None:
-                kmax[self_impl.layer_name] = (
-                    key.abs().max().item(), value.abs().max().item())
-            return orig_forward(self_impl, query, key, value, *a, **kw)
-
-        TritonAttentionImpl.forward = patched_forward
-        try:
+    TritonAttentionImpl.forward = patched_forward
+    try:
+        for ctx in CTXS:
+            reps = max(1, math.ceil(ctx / 78)) + 1
+            text = FILLER * reps + QUESTION
+            ids = tok.encode(text)
+            if len(ids) > ctx:
+                text = tok.decode(ids[: ctx - 8]) + QUESTION
+            stats.clear()
+            dump.clear()
+            if DUMP and ctx == CTXS[-1]:
+                dump["want"] = True
             llm.generate([text], sp(max_tokens=1, ignore_eos=True))
-        finally:
-            TritonAttentionImpl.forward = orig_forward
 
-        kmaxv = max(v[0] for v in kmax.values())
-        vmaxv = max(v[1] for v in kmax.values())
-        results[ctx] = {"k_max": kmaxv, "v_max": vmaxv,
-                        "k_scale_safe": round(kmaxv / 448.0, 6),
-                        "v_scale_safe": round(vmaxv / 448.0, 6)}
-        print(f"ctx={ctx:>6}  max|K|={kmaxv:.3f}  max|V|={vmaxv:.3f}  "
-              f"safe_scale k={results[ctx]['k_scale_safe']} "
-              f"v={results[ctx]['v_scale_safe']}")
+            q_max = max(v[0] for v in stats.values())
+            k_max = max(v[1] for v in stats.values())
+            v_max = max(v[2] for v in stats.values())
+            results[ctx] = {
+                "q_max": q_max, "k_max": k_max, "v_max": v_max,
+                "k_scale_full_range": round(k_max / FP8_MAX, 6),
+                "v_scale_full_range": round(v_max / FP8_MAX, 6),
+                "layers": len(stats),
+                "per_layer_max": {str(li): {"q": round(v[0], 3), "k": round(v[1], 3), "v": round(v[2], 3)}
+                                  for li, v in sorted(stats.items())},
+            }
+            top_layers = sorted(stats.items(), key=lambda kv: -kv[1][1])[:3]
+            print("       layers with the largest max|K|:",
+                  ", ".join(f"{li} ({v[1]:.1f})" for li, v in top_layers))
+            print(f"ctx={ctx:>6}  max|Q|={q_max:8.3f}  max|K|={k_max:8.3f}  max|V|={v_max:8.3f}  "
+                  f"(fp8 e4m3 max {FP8_MAX:.0f}; full-range scales k={results[ctx]['k_scale_full_range']} "
+                  f"v={results[ctx]['v_scale_full_range']})")
+            if dump.get("k") is not None:
+                torch.save({"q": dump["q"], "k": dump["k"], "v": dump["v"], "ctx": ctx,
+                            "layer": DUMP_LAYER, "model": MODEL}, DUMP)
+                print(f"dumped layer {DUMP_LAYER} q{tuple(dump['q'].shape)} k{tuple(dump['k'].shape)} "
+                      f"v{tuple(dump['v'].shape)} at ctx {ctx} -> {DUMP}")
+    finally:
+        TritonAttentionImpl.forward = orig_forward
+
+    if PER_CHANNEL and chan_max[0] is not None:
+        cm = chan_max[0]
+        flat = cm.flatten()
+        srt, idx = torch.sort(flat, descending=True)
+        Hk, D = cm.shape
+        top = [(int(i) // D, int(i) % D, round(float(v), 1)) for v, i in zip(srt[:12], idx[:12])]
+        summary = {
+            "kv_heads": Hk, "head_dim": D,
+            "median": round(float(flat.median()), 3),
+            "p95": round(float(torch.quantile(flat, 0.95)), 3),
+            "max": round(float(flat.max()), 3),
+            "pairs_above_100": int((flat > 100).sum()),
+            "top_pairs_head_channel_max": top,
+        }
+        results["per_channel_k"] = summary
+        print(f"per-(head, channel) max|K| over layers: median {summary['median']}, p95 {summary['p95']}, "
+              f"max {summary['max']}, {summary['pairs_above_100']} of {Hk * D} pairs above 100")
+        print("top (head, channel, max|K|):", top)
 
     with open(OUT, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)

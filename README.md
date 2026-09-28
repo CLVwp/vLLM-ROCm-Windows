@@ -74,12 +74,15 @@ aotriton flash kernel), where the previous fallback materialized fp32 score matr
 cache has been sized, and on Windows going past VRAM spills to shared memory instead of failing. Models
 whose weights leave little headroom (ERNIE, 14 GB) are untested with the new accounting.
 
-**fp8 KV cache** (`--kv-cache-dtype fp8`) is not usable on Qwen2.5 here: per-tensor e4m3 cannot hold
-Qwen's K outlier channels, so the attention output is ~15% off in every layer and generation is garbled
-from the first tokens (the Triton store and load kernels were verified bit-exact; the error is the
-quantization itself, and per-tensor scales do not help). Details in issue #25. Use KVarN for long context.
-`VLLM_WIN_KV_KSCALE` / `VLLM_WIN_KV_VSCALE` (static per-tensor scales, from PR #27) and
-`run/kv_scale_probe.py` exist for the V-clipping side of the problem, not for K.
+**fp8 KV cache** (`--kv-cache-dtype fp8`) is not usable on Qwen2.5 here: a few K channels carry a
+near-constant offset of ~420 (the k_proj bias on the lowest-frequency RoPE channels), fp8 stores it with
+an absolute error of up to 16 whatever the scale, and the attention output of those layers is off by
+0.9-1.0 (max-rel) from the first tokens. The store and load kernels are bit-exact; scales at any
+granularity, e5m2 and a Hadamard rotation do not help, removing a per-channel mean before the store
+does (0.06): measurements and plan in issue #28. Tooling: `run/kv_scale_probe.py` (amplitudes,
+per-channel map, layer dump), `run/kv_quant_schemes.py` (format comparison on a dump),
+`VLLM_WIN_KV_KSCALE` / `VLLM_WIN_KV_VSCALE` (static per-tensor scales, PR #27). Use KVarN for long
+context.
 
 Decode is still below the card's ~800 GB/s memory-bandwidth roofline; per-shape GEMV tuning and porting
 the rest of the `csrc` kernels are ongoing.
