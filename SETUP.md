@@ -166,5 +166,8 @@ Ctrl+C to stop everything.
   documentation. This guide only covers setup and basic use.
 - **gfx1101 validation** (gfx1101-validation.md): the full procedure, the 5 bugs
   hit and their fixes, benchmark numbers, methodology.
+- **fp8 KV cache on Qwen2.5** (kv-fp8-audit.md): fixed via calibrated K-offset removal —
+  calibrate with `run/kv_scale_probe.py` (`VLLM_KV_PROBE_MEAN`), enable with
+  `VLLM_WIN_KV_OFFSETS`; benchmarks and design in the audit file.
 - **Upcoming optimizations**: hipGraph decode (neutral on this card), torch.compile,
-  Triton autotune for gfx1101, fp8 KV cache - follow the repo issues.
+  Triton autotune for gfx1101 - follow the repo issues.

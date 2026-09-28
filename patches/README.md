@@ -6,7 +6,8 @@ Windows + ROCm port are made as **direct edits to that clone**, so they are capt
 patches for reproducibility. Everything else (the platform plugin, native-kernel builds, run
 harness) lives in this repo and is monkeypatched/loaded at runtime without touching vLLM source.
 
-Clone base when these were generated: vLLM `b1388b1` (v0.19.2.dev0).
+Clone base when these were generated: vLLM `b1388b1` — this IS the `v0.19.1` tag (pip reports it
+as `0.19.2.dev0+gb1388b1fb`, a post-tag dev version string).
 
 **These patches are applied automatically** by `python tools/patch_vllm.py vllm` (the same
 step that installs the bootstrap import): already-applied patches are detected and skipped,

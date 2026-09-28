@@ -5,8 +5,9 @@ Windows** (no WSL2) with **AMD ROCm** on **RDNA3** consumer GPUs. Developed and 
 **Radeon RX 7900 XT (gfx1100)**.
 
 This is **not** a fork of vLLM. It is an out-of-tree platform plugin plus a set of
-compatibility shims, a one-line patch, and a build harness that compiles vLLM's own HIP
-kernels natively on Windows. Upstream vLLM is cloned and pinned separately (see Setup).
+compatibility shims, a set of source patches (`patches/vllm/`), and a build harness that
+compiles vLLM's own HIP kernels natively on Windows. Upstream vLLM is cloned and pinned
+separately (see Setup).
 
 ## Status (honest)
 
@@ -20,7 +21,9 @@ Experimental, but past "it just runs". What currently works on the test machine:
   ROCm otherwise (exllama rejects uint4, Marlin is CUDA-only, leaving only the slow `conch` tile).
 - **torch.compile / inductor works** (CompilationMode.STOCK_TORCH_COMPILE), and **hipGraph
   decode capture works** (`cudagraph_mode=FULL_DECODE_ONLY`).
-- **fp8 KV cache** works (Triton path), ~2x KV-cache capacity / context length.
+- **fp8 KV cache** works (Triton path), ~2x KV-cache capacity / context length. On Qwen2.5 it
+  requires the calibrated per-layer K-offset file (see "fp8 KV cache" below); with it, output
+  is coherent at 128-8k context.
 - **KVarN KV-cache quantization** (calibration-free Hadamard + Sinkhorn + asymmetric RTN, K 4-bit /
   V 2-bit; Huawei's method, Triton kernels ported to gfx1100) runs end-to-end and gives **~4.7x KV
   capacity** at ~fp16 accuracy (demonstrated on Qwen2.5-7B: 999k vs 210k KV tokens, coherent). **WIP:**
@@ -74,15 +77,34 @@ aotriton flash kernel), where the previous fallback materialized fp32 score matr
 cache has been sized, and on Windows going past VRAM spills to shared memory instead of failing. Models
 whose weights leave little headroom (ERNIE, 14 GB) are untested with the new accounting.
 
-**fp8 KV cache** (`--kv-cache-dtype fp8`) is not usable on Qwen2.5 here: a few K channels carry a
-near-constant offset of ~420 (the k_proj bias on the lowest-frequency RoPE channels), fp8 stores it with
-an absolute error of up to 16 whatever the scale, and the attention output of those layers is off by
-0.9-1.0 (max-rel) from the first tokens. The store and load kernels are bit-exact; scales at any
-granularity, e5m2 and a Hadamard rotation do not help, removing a per-channel mean before the store
-does (0.06): measurements and plan in issue #28. Tooling: `run/kv_scale_probe.py` (amplitudes,
-per-channel map, layer dump), `run/kv_quant_schemes.py` (format comparison on a dump),
-`VLLM_WIN_KV_KSCALE` / `VLLM_WIN_KV_VSCALE` (static per-tensor scales, PR #27). Use KVarN for long
-context.
+**fp8 KV cache** (`--kv-cache-dtype fp8`) works on Qwen2.5 as of PR #30 (issues #25/#28) — with
+one calibration step. The problem: a few K channels carry a near-constant offset of ~420 (the
+k_proj bias on the lowest-frequency RoPE channels), fp8 stores them with an absolute error of up
+to 16 whatever the scale, and the attention output of those layers was off by 0.9-1.0 (max-rel)
+from the first tokens. Scales at any granularity, e5m2 and a Hadamard rotation do not help; the
+fix subtracts a calibrated per-layer per-channel mean from K before the store (never added back:
+q*mean cancels in the softmax) and optionally normalizes each residual channel to its own fp8
+full range — attention error drops to ~0.05 max-rel / 0.017 rms-rel offline, generation is
+coherent at 128-8k context.
+
+Two steps, from `run\`:
+
+```bat
+:: 1. calibrate once (two sweeps; writes offsets + per-layer + per-channel scales)
+set VLLM_KV_CTXS=128,2048,8192
+set VLLM_KV_PROBE_MEAN=kv_offsets.pt
+python kv_scale_probe.py
+
+:: 2. run any fp8 workload with the offsets file
+set VLLM_WIN_KV_OFFSETS=kv_offsets.pt
+```
+
+Design, measurements and results: [`kv-fp8-audit.md`](kv-fp8-audit.md). Tooling:
+`run/kv_scale_probe.py` (amplitudes, per-channel map, layer dump, offset calibration),
+`run/kv_quant_schemes.py` (format comparison on a dump), `run/kv_pc_kernel_check.py` (direct
+kernel check), `VLLM_WIN_KV_KSCALE` / `VLLM_WIN_KV_VSCALE` (static per-tensor scales, PR #27).
+Without the offsets file Qwen2.5 fp8 stays garbled; KVarN remains the long-context *capacity*
+option.
 
 Decode is still below the card's ~800 GB/s memory-bandwidth roofline; per-shape GEMV tuning and porting
 the rest of the `csrc` kernels are ongoing.
@@ -91,8 +113,10 @@ the rest of the `csrc` kernels are ongoing.
 
 - **Single GPU only.** RCCL does not exist on Windows, so tensor/pipeline parallel are out of
   scope; `torch.distributed` is shimmed for the single-process case only.
-- KV-cache quantization: fp8 works; sub-8-bit (INT8 / 2-bit / KVarN) is not wired up yet, and
-  fp8 currently uses default scales (calibrated `k_scale`/`v_scale` needed for near-lossless).
+- KV-cache quantization: fp8 works, including calibrated per-layer offsets/scales on Qwen2.5
+  (see "fp8 KV cache" above); KVarN works but stays WIP (see Status); int8-asymmetric per-channel
+  K (the theoretically cleanest format, < 0.011 error everywhere) would need a new vLLM cache
+  dtype and is not planned.
 - Only part of vLLM's kernel suite is built natively so far (see "Native kernels" below).
 
 ## Tested stack (pinned, fragile)
@@ -124,8 +148,13 @@ Note: helper scripts contain absolute paths from the author's machine
     resolve to the real HIP kernels, and registers torch-native fallbacks for any op the
     native build does not provide (so vLLM's unconditional `torch.ops._C.*` bindings work
     either way).
-- vLLM is installed with `VLLM_TARGET_DEVICE=empty` (no kernels compiled by vLLM's own build)
-  plus a one-line patch to `vllm/__init__.py` that imports the shim early.
+  - `kv_scales.py` / `kv_offsets.py`: static fp8 KV scales and calibrated per-layer K-offset
+    removal (+ optional per-channel residual scale) for fp8 KV caches — issues #25/#28, see
+    "fp8 KV cache" in Status and `kv-fp8-audit.md`.
+- vLLM is installed with `VLLM_TARGET_DEVICE=empty` (no kernels compiled by vLLM's own build),
+  then `tools/patch_vllm.py` applies the source patches under `patches/vllm/` (the bootstrap
+  import in `vllm/__init__.py`, Windows port fixes, the KVarN backend, the fp8-K per-channel
+  descale kernels, ...).
 
 ### Native kernels
 
@@ -258,9 +287,12 @@ installed `vllm` package).
 cd run
 python first_token.py        :: smallest end-to-end smoke test (OPT-125m)
 python bench.py              :: decode tok/s + VRAM (configure via VLLM_BENCH_* env vars)
-python kv_bench.py           :: KV-cache dtype bench: prefill/decode/drift vs fp16 at 128..16k (VLLM_KV_* env vars)
-python kv_scale_probe.py     :: per-layer max|K| / max|V| by context length, to pick static fp8 KV scales
 python batch_sweep.py        :: aggregate throughput vs concurrency
+python kv_bench.py           :: KV-cache dtype bench: prefill/decode/drift vs fp16 at 128..16k (VLLM_KV_* env vars)
+python kv_scale_probe.py     :: per-layer amplitudes, per-channel K map, layer dump, and fp8 KV
+                             ::   offset/scale calibration (VLLM_KV_PROBE_* env vars)
+python kv_quant_schemes.py   :: offline KV quantization-format comparison on a probe dump
+python kv_pc_kernel_check.py :: direct bit-exact check of the fp8 per-channel-scale Triton kernels
 ```
 
 `bench.py` knobs (env): `VLLM_BENCH_COMPILE=1` enables inductor, `VLLM_BENCH_CGMODE=FULL_DECODE_ONLY`
@@ -278,7 +310,9 @@ set HF_HUB_OFFLINE=1
 
 - `windows_rocm_plugin/` - the out-of-tree platform plugin and compatibility shims
 - `tools/` - patch and fixup scripts
-- `run/` - bench / first-token / profiling / batch-sweep drivers
+- `patches/` - direct edits to the `vllm/` clone, captured as git patches for reproducibility
+  (applied automatically by `tools/patch_vllm.py`; documented in `patches/README.md`)
+- `run/` - bench / KV-cache tooling / profiling / batch-sweep drivers
 - `experiments/` - native `csrc` kernel build harness and standalone HIP/Triton kernel proofs
 
 ## License
