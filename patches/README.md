@@ -20,6 +20,7 @@ git -C vllm apply --ignore-whitespace ../patches/vllm/hf-fs-windows-path.patch
 git -C vllm apply --ignore-whitespace ../patches/vllm/kvarn.patch
 git -C vllm apply --ignore-whitespace ../patches/vllm/native-attn-sliding-window.patch
 git -C vllm apply --ignore-whitespace ../patches/vllm/native-cache-ops.patch
+git -C vllm apply --ignore-whitespace ../patches/vllm/triton-attn-qscales.patch
 git -C vllm apply --ignore-whitespace ../patches/vllm/windows-serve-windows.patch
 ```
 
@@ -94,6 +95,14 @@ Triton kernel for the per-token KV write: one HIP launch instead of a Triton lau
 step. Falls back to the Triton kernel when the extension is not loaded, and always for fp8 caches:
 the Windows build of the extension has no `ENABLE_FP8`, so its fp8 `scaled_convert` is a stub
 (`assert(false)`, or zeros under NDEBUG) while the Triton kernel quantizes correctly.
+
+## triton-attn-qscales.patch
+`v1/attention/backends/triton_attn.py` (from PR #27, @CLVwp): the fp8 KV path asserted
+`layer._q_scale_float == 1.0`, but on ROCm this backend never quantizes the query
+(`supports_quant_query_input` is CUDA-only, so `layer.query_quant` is None) and never descales
+it, so a non-1.0 q_scale is inert here. `--calculate-kv-scales` writes one (it calibrates Q for
+the flash-attn / flashinfer fp8-Q paths) and used to kill the engine at startup. The assert is
+now conditional on `layer.query_quant` being present, which keeps the upstream behaviour on CUDA.
 
 ## native-attn-sliding-window.patch
 `csrc/attention/{attention_kernels.cuh, paged_attention_v1.cu}` + `csrc/ops.h`: threads a new

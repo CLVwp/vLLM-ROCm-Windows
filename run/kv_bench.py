@@ -20,9 +20,11 @@ Environment:
   VLLM_KV_CTXS      comma list of context targets (default 128,2048,8192,16384)
   VLLM_KV_MAXTOK    decode tokens per measurement (default 128)
   VLLM_KV_BACKEND   attention backend (default TRITON_ATTN)
-  VLLM_KV_OUT       JSONL output path (default C:/AI/tmp/kv_results.jsonl)
+  VLLM_KV_UTIL      gpu_memory_utilization (default 0.6)
+  VLLM_KV_TRUST     1 -> trust_remote_code=True (default 0)
+  VLLM_KV_OUT       JSONL output path (default <temp dir>/kv_results.jsonl)
   VLLM_KV_REF       fp16 reference JSON written by the auto run and read by
-                    later runs for the drift check (default C:/AI/tmp/kv_ref.json)
+                    later runs for the drift check (default <temp dir>/kv_ref.json)
   VLLM_KV_SAVE_REF  1 -> write VLLM_KV_REF from this run's outputs
 """
 
@@ -30,7 +32,13 @@ import gc
 import json
 import math
 import os
+import tempfile
 import time
+
+# In-process engine, like every other run/ script: the plugin's config-time hooks (the
+# static KV-scale override among them) are applied in the process that builds the
+# VllmConfig, and a spawned engine-core child would start without them.
+os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")
 
 from vllm import LLM, SamplingParams
 
@@ -40,8 +48,10 @@ SCALES = os.environ.get("VLLM_KV_SCALES", "0") == "1"
 CTXS = [int(c) for c in os.environ.get("VLLM_KV_CTXS", "128,2048,8192,16384").split(",")]
 MAXTOK = int(os.environ.get("VLLM_KV_MAXTOK", "128"))
 BACKEND = os.environ.get("VLLM_KV_BACKEND", "TRITON_ATTN")
-OUT = os.environ.get("VLLM_KV_OUT", "C:/AI/tmp/kv_results.jsonl")
-REF = os.environ.get("VLLM_KV_REF", "C:/AI/tmp/kv_ref.json")
+OUT = os.environ.get("VLLM_KV_OUT", os.path.join(tempfile.gettempdir(), "kv_results.jsonl"))
+REF = os.environ.get("VLLM_KV_REF", os.path.join(tempfile.gettempdir(), "kv_ref.json"))
+UTIL = float(os.environ.get("VLLM_KV_UTIL", "0.6"))
+TRUST = os.environ.get("VLLM_KV_TRUST", "0") == "1"
 SAVE_REF = os.environ.get("VLLM_KV_SAVE_REF", "0") == "1"
 
 GIB = 1024 ** 3
@@ -74,9 +84,13 @@ def measure(llm, tokenizer, ctx: int) -> dict:
     prompt = build_prompt(tokenizer, ctx)
     n_in = len(tokenizer.encode(prompt))
 
-    t0 = time.perf_counter()
-    llm.generate([prompt], SamplingParams(max_tokens=1, ignore_eos=True))
-    prefill = time.perf_counter() - t0
+    # Two prefill-only runs, keep the faster: the first call at a new length can still
+    # include Triton JIT/autotune work, and decode below is derived by subtracting it.
+    prefill = float("inf")
+    for _ in range(2):
+        t0 = time.perf_counter()
+        llm.generate([prompt], SamplingParams(max_tokens=1, ignore_eos=True))
+        prefill = min(prefill, time.perf_counter() - t0)
 
     t0 = time.perf_counter()
     out = llm.generate([prompt], SamplingParams(max_tokens=MAXTOK, ignore_eos=True))[0]
@@ -103,15 +117,18 @@ def main() -> None:
 
     kwargs = dict(
         model=MODEL, dtype="float16", attention_backend=BACKEND,
-        tensor_parallel_size=1, gpu_memory_utilization=0.6,
+        tensor_parallel_size=1, gpu_memory_utilization=UTIL,
         max_model_len=max(CTXS) + 256, kv_cache_dtype=DTYPE,
         enable_prefix_caching=False, enforce_eager=True,
-        trust_remote_code=True,
+        trust_remote_code=TRUST,
     )
     if SCALES:
         kwargs["calculate_kv_scales"] = True
     if os.environ.get("VLLM_KV_NOCHUNK", "0") == "1":
         kwargs["enable_chunked_prefill"] = False
+        # vLLM refuses max_num_batched_tokens < max_model_len without chunking;
+        # a single-shot prefill needs the whole prompt in one batch.
+        kwargs["max_num_batched_tokens"] = kwargs["max_model_len"]
     # KVarN's fp16 tail pool is sized from max_num_batched_tokens (pool_slots:
     # 2*max_num_seqs + prefill_blocks + 8 per layer) and is not counted by
     # gpu_memory_utilization: the 8192 default OOMs a 16 GiB card on 7-9B
@@ -124,6 +141,9 @@ def main() -> None:
         kwargs["max_num_seqs"] = int(seqs)
     llm = LLM(**kwargs)
     tok = llm.get_tokenizer()
+    # Warm-up: JIT/autotune every kernel once on a short prompt so the first measured
+    # length does not pay the compile time (it showed up as a bogus decode rate).
+    llm.generate([FILLER + QUESTION], SamplingParams(max_tokens=4, ignore_eos=True))
 
     rows = [measure(llm, tok, c) for c in CTXS]
 

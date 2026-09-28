@@ -88,6 +88,11 @@ class WindowsRocmPlatform(RocmPlatform):
     @classmethod
     def check_and_update_config(cls, vllm_config) -> None:
         super().check_and_update_config(vllm_config)
+        # We are configuring a vLLM engine: make the plugin's INFO lines (hooks applied,
+        # KVarN pool clamp, KV-scale override) visible on stderr; see bootstrap.py.
+        import logging
+        logging.getLogger("vllm_windows_rocm").setLevel(
+            os.environ.get("VLLM_WIN_LOG_LEVEL", "INFO").upper())
         # KVarN KV-cache quant: by default keep sliding-window layers in fp16 (only global
         # attention layers compress). Otherwise the SlidingWindowSpec would be built with the
         # uint8 kvarn dtype but sized by the fp16 page formula -> allocator mismatch. Route SWA

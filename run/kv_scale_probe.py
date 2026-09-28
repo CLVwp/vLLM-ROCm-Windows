@@ -9,12 +9,14 @@ record max|K| / max|V| per layer, then compare against the KV fp8 e4m3
 representable range (448) to derive a safe static scale per context budget.
 
 Usage:
-  python kv_scale_probe.py            # uses VLLM_KV_CTXS / VLLM_KV_MODEL
+  python kv_scale_probe.py            # uses VLLM_KV_CTXS / VLLM_KV_MODEL / VLLM_KV_UTIL /
+                                      # VLLM_KV_TRUST / VLLM_KV_PROBE_OUT
 """
 
 import json
 import math
 import os
+import tempfile
 
 # MUST be set before importing vllm: keep the engine in-process so the
 # module-level attention hooks below intercept the real forward path.
@@ -26,7 +28,9 @@ from vllm import LLM, SamplingParams as sp
 
 MODEL = os.environ.get("VLLM_KV_MODEL", "Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4")
 CTXS = [int(c) for c in os.environ.get("VLLM_KV_CTXS", "128,2048,8192,16384").split(",")]
-OUT = os.environ.get("VLLM_KV_PROBE_OUT", "C:/AI/tmp/kv_scale_probe.json")
+OUT = os.environ.get("VLLM_KV_PROBE_OUT", os.path.join(tempfile.gettempdir(), "kv_scale_probe.json"))
+UTIL = float(os.environ.get("VLLM_KV_UTIL", "0.6"))
+TRUST = os.environ.get("VLLM_KV_TRUST", "0") == "1"
 
 FILLER = (
     "The history of GPU computing begins in the late 1990s when fixed function "
@@ -42,9 +46,9 @@ QUESTION = "\n\nSummarize the text above."
 def main() -> None:
     llm = LLM(
         model=MODEL, dtype="float16", attention_backend="TRITON_ATTN",
-        tensor_parallel_size=1, gpu_memory_utilization=0.6,
+        tensor_parallel_size=1, gpu_memory_utilization=UTIL,
         max_model_len=max(CTXS) + 256, kv_cache_dtype="auto",
-        enable_prefix_caching=False, enforce_eager=True, trust_remote_code=True,
+        enable_prefix_caching=False, enforce_eager=True, trust_remote_code=TRUST,
     )
     tok = llm.get_tokenizer()
 

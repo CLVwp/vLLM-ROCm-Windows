@@ -25,6 +25,21 @@ import tempfile
 
 logger = logging.getLogger(__name__)
 
+# The plugin logs what it patches (native ops loaded, KV-scale override, CK prefill, the
+# 2D-decode switch) at INFO on its own logger, which nobody configures: without a handler
+# those lines are dropped and a user cannot tell whether a hook took. Attach one on stderr
+# (stdout must stay machine-readable for vLLM subprocesses, issue #17) and stop propagation
+# so vLLM root handlers cannot print them twice. This module runs in every interpreter on
+# the machine (sitecustomize), so the level stays at WARNING here; the platform raises it
+# to INFO once a vLLM engine is being configured. VLLM_WIN_LOG_LEVEL overrides both.
+_pkg_logger = logging.getLogger("vllm_windows_rocm")
+if not _pkg_logger.handlers:
+    _h = logging.StreamHandler()  # stderr
+    _h.setFormatter(logging.Formatter("vllm-win %(levelname)s %(name)s: %(message)s"))
+    _pkg_logger.addHandler(_h)
+    _pkg_logger.setLevel(os.environ.get("VLLM_WIN_LOG_LEVEL", "WARNING").upper())
+    _pkg_logger.propagate = False
+
 from .torchdist_shim import apply
 
 # Keep the validated torch/Triton fallbacks as the default for Windows ROCm entrypoints.

@@ -25,6 +25,10 @@ make saturation MORE likely, not less.
 
 All diagnostics go through logging (never print): this code runs inside
 the engine process whose stdout must stay machine-readable (issue #17).
+The hook is installed from the platform's check_and_update_config, i.e. in
+the process that builds the VllmConfig, so it needs the engine in-process
+(VLLM_ENABLE_V1_MULTIPROCESSING=0, which every run/ script and localserve
+already set).
 """
 
 import logging
@@ -50,6 +54,8 @@ def apply_static_kv_scales() -> None:
     from vllm.model_executor.layers.attention.attention import Attention
 
     orig = Attention.process_weights_after_loading
+    if getattr(orig, "_kv_scales_wrapped", False):
+        return  # check_and_update_config can run more than once per process
 
     def patched(self, act_dtype) -> None:
         orig(self, act_dtype)
@@ -62,6 +68,7 @@ def apply_static_kv_scales() -> None:
             self._v_scale_float = v_scale
             logger.debug("static KV scales applied on %s", self.layer_name)
 
+    patched._kv_scales_wrapped = True
     Attention.process_weights_after_loading = patched
     logger.info(
         "vllm-win: static KV scale override installed (k=%s v=%s)",

@@ -78,6 +78,8 @@ whose weights leave little headroom (ERNIE, 14 GB) are untested with the new acc
 Qwen's K outlier channels, so the attention output is ~15% off in every layer and generation is garbled
 from the first tokens (the Triton store and load kernels were verified bit-exact; the error is the
 quantization itself, and per-tensor scales do not help). Details in issue #25. Use KVarN for long context.
+`VLLM_WIN_KV_KSCALE` / `VLLM_WIN_KV_VSCALE` (static per-tensor scales, from PR #27) and
+`run/kv_scale_probe.py` exist for the V-clipping side of the problem, not for K.
 
 Decode is still below the card's ~800 GB/s memory-bandwidth roofline; per-shape GEMV tuning and porting
 the rest of the `csrc` kernels are ongoing.
@@ -253,6 +255,8 @@ installed `vllm` package).
 cd run
 python first_token.py        :: smallest end-to-end smoke test (OPT-125m)
 python bench.py              :: decode tok/s + VRAM (configure via VLLM_BENCH_* env vars)
+python kv_bench.py           :: KV-cache dtype bench: prefill/decode/drift vs fp16 at 128..16k (VLLM_KV_* env vars)
+python kv_scale_probe.py     :: per-layer max|K| / max|V| by context length, to pick static fp8 KV scales
 python batch_sweep.py        :: aggregate throughput vs concurrency
 ```
 
