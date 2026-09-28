@@ -16,6 +16,11 @@ import sys
 import os
 
 MARK = "vllm_windows_rocm.bootstrap"
+# The patches were generated against this commit (the v0.19.1 tag); see patches/README.md.
+# A clone at any other commit may make them fail or apply with shifted context.
+EXPECTED_VLLM_BASE = "b1388b1"
+# Marker file created inside the vllm clone to record which patches have been applied.
+MARKER_NAME = ".winrocm_patches_applied"
 BLOCK = (
     "\n# --- vLLM-on-Windows-ROCm: install the single-process torch.distributed shim and\n"
     "# _C op fallbacks before any vllm submodule that imports torch.distributed is loaded.\n"
@@ -60,18 +65,47 @@ def apply_source_patches(vllm_root: str) -> int:
         print(f"notice: {vllm_root} is not a git work tree; skipping "
               f"{len(patches)} source patch(es) — apply them manually per patches/README.md")
         return 0
+    head = subprocess.run(
+        ["git", "-C", vllm_root, "rev-parse", "HEAD"], capture_output=True, text=True
+    )
+    if head.returncode == 0 and not head.stdout.strip().startswith(EXPECTED_VLLM_BASE):
+        print(f"WARNING: vllm checkout is at {head.stdout.strip()[:12]}, but the patches were "
+              f"generated against {EXPECTED_VLLM_BASE} (tag v0.19.1). Continuing — patches that "
+              "no longer apply cleanly will be reported below. See patches/README.md.")
+    # Applied-patch bookkeeping lives in a marker file inside the clone: reverse-apply
+    # detection alone cannot tell "already applied" from "broken" once a later patch
+    # overlaps an earlier one's context (e.g. triton-attn-pc-scale over native-cache-ops).
+    marker_path = os.path.join(vllm_root, MARKER_NAME)
+    try:
+        with open(marker_path, encoding="utf-8") as f:
+            done = set(f.read().split())
+    except OSError:
+        done = set()
     failures = 0
     for name in patches:
-        p = os.path.join(patch_dir, name)
-        if _patch_already_applied(vllm_root, p):
+        if name in done:
             print(f"already applied: {name}")
             continue
+        p = os.path.join(patch_dir, name)
         r = _git_apply(vllm_root, p)
         if r.returncode == 0:
             print(f"applied: {name}")
-        else:
-            failures += 1
-            print(f"FAILED to apply {name}: {r.stderr.strip()}", file=sys.stderr)
+            done.add(name)
+            continue
+        if _patch_already_applied(vllm_root, p):
+            print(f"already applied: {name}")
+            done.add(name)
+            continue
+        failures += 1
+        print(f"FAILED to apply {name}: {r.stderr.strip()}", file=sys.stderr)
+        print(f"notice: if {name} was applied by hand on this tree (a later patch overlaps its "
+              f"context, so detection fails), add its filename to {vllm_root}/{MARKER_NAME} "
+              "and re-run. On a fresh clone this branch never triggers.", file=sys.stderr)
+    try:
+        with open(marker_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(sorted(done & set(patches))) + "\n")
+    except OSError as e:
+        print(f"notice: could not write {marker_path} ({e}); re-runs will re-detect", file=sys.stderr)
     return 1 if failures else 0
 
 

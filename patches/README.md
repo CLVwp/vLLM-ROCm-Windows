@@ -10,9 +10,11 @@ Clone base when these were generated: vLLM `b1388b1` — this IS the `v0.19.1` t
 as `0.19.2.dev0+gb1388b1fb`, a post-tag dev version string).
 
 **These patches are applied automatically** by `python tools/patch_vllm.py vllm` (the same
-step that installs the bootstrap import): already-applied patches are detected and skipped,
-so the command is safe to re-run, and it is the required step for `vllm serve` to work on
-Windows (see `windows-serve-windows.patch` below). Patches apply in **alphabetical filename
+step that installs the bootstrap import and the venv `sitecustomize.py`): applied patches are
+recorded in `vllm/.winrocm_patches_applied` and skipped on re-runs, so the command is safe to
+re-run, and it is the required step for `vllm serve` to work on Windows (see
+`windows-serve-windows.patch` below). The tool also warns when the clone is not at the
+expected base commit (see below). Patches apply in **alphabetical filename
 order** — when a patch depends on another one being applied first, name it so it sorts after
 (e.g. `triton-attn-pc-scale.patch` builds on `native-cache-ops.patch`'s if/else store dispatch,
 and sorts after it). The manual flow remains as fallback:
