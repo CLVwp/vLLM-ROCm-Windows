@@ -1,7 +1,71 @@
 # Audit — issue #28 : `--kv-cache-dtype fp8` inutilisable sur Qwen2.5
 
-Journal unique de l'audit/investigation (branche `issue28-kv-fp8-offset`).
+Journal unique de l'audit/investigation (branche `issue28-kv-fp8-offset`,
+livrée via PR #30 ; options 1 puis 1+2).
 Constat de départ, mesures, design, implémentation, résultats e2e, limites.
+
+---
+
+## 0. Option 2 — scale per-canal du résidu (ajout postérieur)
+
+Complément de l'option 1 (même schéma que « mean removed + per-(head,channel)
+scale » du tableau section 3) : chaque canal du résidu est normalisé à sa
+propre pleine gamme fp8 au store, et re-multiplié à la lecture. C'est la
+première option qui touche les kernels — volontairement minimale :
+
+- **Store** (`triton_reshape_and_cache_flash.py`) : `tile_pos` énumère déjà
+  (head, dim) dans l'ordre naturel `[Hk, D]` → la charge per-canal est un
+  flat load à `pc_ptr + tile_pos` avant la division fp8 ; kwarg optionnel
+  `k_scale_channel` + constexpr `HAS_K_SCALE_CHANNEL`. Le variant `_diffkv`
+  est du code mort (zéro appelant) — non touché.
+- **Lecture** (`triton_unified_attention.py`) : K est chargé en tuiles
+  `[HEAD_SIZE, TILE_SIZE]` dont l'axe ligne est le canal → charge
+  loop-invariante `pc[kv_head_idx*HEAD_SIZE + offs_d]` avant la boucle de
+  tuiles, multipliée au site du descale scalaire (branches fp8-K / Q non-fp8,
+  kernels 2D et 3D) ; kwarg `k_descale_channel` + constexpr `USE_PC_K_SCALE`.
+  Un seul appel `unified_attention` couvre prefill+decode.
+- **Backend** (`triton_attn.py`) : les deux sites passent
+  `getattr(layer, "_kv_k_pc_scale", None)`.
+- **Plugin** (`kv_offsets.py`) : clé `"pc_scales"` du fichier (optionnelle —
+  absente = option 1 seule, compat ascendante) ; quand présente, `_k_scale`
+  reste à 1.0 (le scale per-canal **remplace** le per-tensor, sémantique de
+  l'issue). Calibration : `pc_scales` = `res_max/448` par (head, canal) — la
+  carte était déjà calculée en passe 2 du probe, zéro coût GPU en plus.
+- Ces changements de l'arbre `vllm/` sont capturés dans
+  `patches/vllm/triton-attn-pc-scale.patch` (appliqué par
+  `tools/patch_vllm.py`, ordre : après `native-cache-ops`).
+
+### Vérifications option 2
+
+- **Check kernel direct** (`run/kv_pc_kernel_check.py`) : store round-trip
+  (layouts flat 4D ET head-major 5D) et lecture 2D, on/off, **bit-exacts**
+  vs référence torch.
+- **Offline** (couche 27 @ 8192, sémantique runtime) :
+  baseline 0.890/0.240 → option 1 : 0.049-0.058/0.033 → **option 1+2 :
+  0.047/0.017** (le rms-rel 0.017 est exactement la valeur du tableau de
+  l'issue ; le max-rel partait déjà bas grâce au mu calibré).
+- **E2E** (`run/kv_bench.py`, même réf fp16 que la section 7) :
+
+| ctx | option 1 (agree / decode tok/s) | option 1+2 (agree / decode tok/s) |
+| --- | --- | --- |
+| 125 | 32 % / 82.2 | 31 % / 81.8 |
+| 2045 | 43 % / 78.6 | 87 % / 78.6 |
+| 8189 | 2-20 % / 71.5 | 9 % / 71.5 |
+
+  ⚠️ **`agree_frac` est une métrique bruitée** : trois runs identiques
+  (même binaire, même config, fichier option 1) ont donné 31/4/20 puis
+  31/4/3 — les ctx 125 et 2045 se reproduisent, le 8189 non. Cause :
+  nondéterminisme run-à-run du moteur lui-même (très probablement les
+  réductions atomiques du GEMM GPTQ int4), que le décodage glouton
+  amplifie en cascades d'argmax sur quasi-égalités. Les tirages ci-dessus
+  sont donc indicatifs ; la comparaison fiable est l'offline (rms-rel
+  0.033 → 0.017, déterministe) et la qualité de texte, stable et fluide
+  dans **tous** les runs de toutes les configs depuis l'option 1.
+
+  Perf decode identique (les charges per-canal sont loop-invariantes côté
+  lecture, un flat load côté store). Compat : l'ancien fichier sans
+  `pc_scales` garde le comportement option 1 (« 0 with per-channel scale »
+  en log, textes cohérents).
 
 ---
 

@@ -194,6 +194,10 @@ def main() -> None:
             "offsets": {li: mu.detach().cpu() for li, mu in mus.items()},
             "k_scales": {li: float(res_max[li].amax() / FP8_MAX)
                          for li in mus if li in res_max},
+            # option 2: per-(head, channel) full-range scale of the residual;
+            # consumed by the fp8 branches of the Triton store/read kernels
+            "pc_scales": {li: (res_max[li] / FP8_MAX).detach().cpu()
+                          for li in mus if li in res_max},
         }
         torch.save(out, MEAN)
         top = sorted(out["k_scales"].items(), key=lambda kv: -kv[1])[:5]

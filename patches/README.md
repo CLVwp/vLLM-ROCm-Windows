@@ -20,6 +20,7 @@ git -C vllm apply --ignore-whitespace ../patches/vllm/hf-fs-windows-path.patch
 git -C vllm apply --ignore-whitespace ../patches/vllm/kvarn.patch
 git -C vllm apply --ignore-whitespace ../patches/vllm/native-attn-sliding-window.patch
 git -C vllm apply --ignore-whitespace ../patches/vllm/native-cache-ops.patch
+git -C vllm apply --ignore-whitespace ../patches/vllm/triton-attn-pc-scale.patch
 git -C vllm apply --ignore-whitespace ../patches/vllm/triton-attn-qscales.patch
 git -C vllm apply --ignore-whitespace ../patches/vllm/windows-serve-windows.patch
 ```
@@ -120,3 +121,22 @@ and numerically correct, BUT the end-to-end ROCM_ATTN integration REGRESSES (-9%
 the path overhead negates the kernel win. Kept
 because the kernel is the RDNA3-native `fmha_v3` equivalent and the remaining flash-layout-swap path
 would reuse it.
+
+## triton-attn-pc-scale.patch
+Issue #28 option 2: optional per-(kv head, channel) K descale for fp8 KV caches, on top of the
+plugin's `kv_offsets` mean-removal (see `kv-fp8-audit.md`). The residual of each channel is
+normalized to its own fp8 full range at store time and multiplied back at read time:
+
+- `triton_reshape_and_cache_flash.py`: optional `k_scale_channel` tensor + `HAS_K_SCALE_CHANNEL`
+  constexpr in `reshape_and_cache_kernel_flash` / wrapper — `tile_pos` already enumerates
+  (head, dim) in natural `[Hk, D]` order, so the per-channel load is a flat indexed load before
+  the fp8 divide. The `_diffkv` variant is unreachable under TRITON_ATTN and is not touched.
+- `triton_unified_attention.py`: optional `k_descale_channel` + `USE_PC_K_SCALE` constexpr in the
+  2D and 3D kernels — a loop-invariant `[HEAD_SIZE_PADDED]` load at `kv_head_idx * HEAD_SIZE +
+  offs_d`, multiplied where the scalar descale is applied (fp8-K / non-fp8-Q branch only).
+- `triton_attn.py`: both call sites pass `getattr(layer, "_kv_k_pc_scale", None)` — the tensor is
+  stashed per layer by the plugin's `kv_offsets.py` when the offsets file has a `pc_scales` key
+  (absent key = option 1 only; constexpr off = bit-identical codegen, no regression).
+
+Direct kernel check: `run/kv_pc_kernel_check.py` (store round-trip + read descale vs a torch
+reference, on/off, bit-exact).
