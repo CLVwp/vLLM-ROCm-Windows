@@ -598,6 +598,36 @@ def maybe_patch_ck_prefill() -> None:
     logger.info("CK varlen FMHA patched into TritonAttentionImpl.forward (pure prefill, head 128, fp16/bf16)")
 
 
+def maybe_patch_attn_2d_decode() -> None:
+    """Force TRITON_ATTN decode through the 2D unified-attention kernel, skipping the 3D
+    split-softmax kernel + reduce. A bisect switch for KV-cache problems that only show at long
+    context (issue #25: fp8 KV collapses at 16k, prefill via the 2D kernel is fine, decode via the
+    3D kernel is not): unified_attention takes the 2D kernel whenever num_seqs > seq_threshold_3D,
+    and the 2D grid does not depend on seq_len, so cudagraph capture is unaffected. Opt-in
+    VLLM_WIN_ATTN_2D_DECODE=1; applied from the platform's check_and_update_config."""
+    if os.environ.get("VLLM_WIN_ATTN_2D_DECODE", "0") != "1":
+        return
+    try:
+        import vllm.v1.attention.backends.triton_attn as _mod
+        _B = _mod.TritonAttentionMetadataBuilder
+    except Exception as e:  # noqa: BLE001
+        logger.warning("2D-decode patch skipped (import failed): %r", e)
+        return
+    if getattr(_B.build, "_2d_wrapped", False):
+        return
+    _orig_build = _B.build
+
+    def _build(self, *args, **kwargs):
+        md = _orig_build(self, *args, **kwargs)
+        md.seq_threshold_3D = -1
+        return md
+
+    _build._2d_wrapped = True
+    _B.build = _build
+    logger.info("TRITON_ATTN decode forced onto the 2D unified-attention kernel "
+                "(VLLM_WIN_ATTN_2D_DECODE=1)")
+
+
 def install() -> None:
     global _INSTALLED
     if _INSTALLED:

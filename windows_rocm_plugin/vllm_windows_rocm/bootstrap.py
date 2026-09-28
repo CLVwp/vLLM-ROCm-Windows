@@ -30,6 +30,12 @@ from .torchdist_shim import apply
 # Keep the validated torch/Triton fallbacks as the default for Windows ROCm entrypoints.
 os.environ.setdefault("VLLM_ROCM_USE_SKINNY_GEMM", "0")
 os.environ.setdefault("VLLM_ROCM_USE_AITER", "0")
+# SDPA on ROCm: PyTorch only lists gfx90a/gfx942/gfx1100/gfx1201 as supported for its aotriton
+# flash kernels; every other RDNA3/3.5 part (gfx1101, gfx1102, gfx1150, gfx1151) is gated behind
+# this flag and silently falls back to the math kernel, which materializes the whole score
+# matrix (+16.5 GiB per layer at 8k on a 28-head model). The torch-rocm Windows wheels ship
+# the gfx11xx aotriton image, so enabling it is safe; an explicit user value is kept.
+os.environ.setdefault("TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL", "1")
 
 apply()
 

@@ -647,10 +647,10 @@ index b4c77e5..625ea7e 100644
  TORCH_DTYPE_TO_NUMPY_DTYPE = {
 diff --git a/vllm/v1/attention/backends/kvarn_attn.py b/vllm/v1/attention/backends/kvarn_attn.py
 new file mode 100644
-index 0000000..a7bd4cb
+index 0000000..2117b9e
 --- /dev/null
 +++ b/vllm/v1/attention/backends/kvarn_attn.py
-@@ -0,0 +1,2366 @@
+@@ -0,0 +1,2413 @@
 +# SPDX-License-Identifier: Apache-2.0
 +# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 +"""KVarN attention backend.
@@ -727,6 +727,52 @@ index 0000000..a7bd4cb
 +_HAS_FLASH_ATTN = is_flash_attn_varlen_func_available()
 +if _HAS_FLASH_ATTN:
 +    from vllm.v1.attention.backends.fa_utils import flash_attn_varlen_func
++
++try:
++    from torch.nn.attention.bias import causal_lower_right as _causal_lower_right
++except Exception:  # noqa: BLE001  (torch < 2.3)
++    _causal_lower_right = None
++
++
++def _sdpa_causal(q_r, k_r, v_r, scale, causal=True):
++    """SDPA on [1, H, L, D] tensors with flash_attn's causal convention: the mask is
++    bottom-right aligned when seqlen_q < seqlen_k (query t sees keys <= cached + t).
++
++    Windows ROCm has neither vllm_flash_attn nor flash_attn, but torch's SDPA reaches the
++    aotriton flash kernel here, GQA included, as long as that mask is a CausalBias: a
++    boolean mask or fp32 inputs route to the math kernel, which materializes the whole
++    [heads, q, k] score matrix (+4.9 GiB per layer at 2048x8192 on 32 heads, measured).
++    """
++    Lq, Lk = q_r.shape[2], k_r.shape[2]
++    gqa = q_r.shape[1] != k_r.shape[1]
++    if not causal:
++        return F.scaled_dot_product_attention(q_r, k_r, v_r, scale=scale, enable_gqa=gqa)
++    if Lq == Lk:
++        return F.scaled_dot_product_attention(
++            q_r, k_r, v_r, is_causal=True, scale=scale, enable_gqa=gqa)
++    if _causal_lower_right is not None and Lq < Lk:
++        return F.scaled_dot_product_attention(
++            q_r, k_r, v_r, attn_mask=_causal_lower_right(Lq, Lk), scale=scale, enable_gqa=gqa)
++    q_pos = torch.arange(Lq, device=q_r.device).unsqueeze(1) + (Lk - Lq)
++    k_pos = torch.arange(Lk, device=q_r.device).unsqueeze(0)
++    return F.scaled_dot_product_attention(
++        q_r, k_r, v_r, attn_mask=k_pos <= q_pos, scale=scale, enable_gqa=gqa)
++
++
++def _sdpa_varlen(q, k, v, cu_q, cu_k, scale, causal=True):
++    """flash_attn_varlen_func stand-in: one SDPA call per request on thd-packed q/k/v
++    (q, out: [Tq, Hq, D]; k, v: [Tk, Hk, D]; cu_*: int32 [B+1] on device)."""
++    cu_q_l, cu_k_l = cu_q.tolist(), cu_k.tolist()
++    out = torch.empty_like(q)
++    for r in range(len(cu_q_l) - 1):
++        qs, qe, ks, ke = cu_q_l[r], cu_q_l[r + 1], cu_k_l[r], cu_k_l[r + 1]
++        if qe <= qs:
++            continue
++        o = _sdpa_causal(q[qs:qe].transpose(0, 1).unsqueeze(0),
++                         k[ks:ke].transpose(0, 1).unsqueeze(0),
++                         v[ks:ke].transpose(0, 1).unsqueeze(0), scale, causal)
++        out[qs:qe] = o[0].transpose(0, 1)
++    return out
 +
 +
 +# ──────────────────────────────────────────────────────────────────────────────
@@ -2498,6 +2544,13 @@ index 0000000..a7bd4cb
 +                dtype=query.dtype, device=device,
 +            )
 +        if attn_metadata is None:
++            # Memory profiling: vLLM runs the model without attention metadata and
++            # sizes the KV cache from the peak it observes here, so the fp16 tail pool,
++            # rotation scratch and decode buffers must be allocated in this pass. Done
++            # later they land on top of a KV cache that already took the remaining
++            # memory (issue #26). kv_cache is a CPU placeholder at this point: use the
++            # query's device.
++            self._ensure_pool(device, num_blocks_hint=0)
 +            return output.fill_(0)
 +
 +        N = attn_metadata.num_actual_tokens
@@ -2505,7 +2558,7 @@ index 0000000..a7bd4cb
 +            return output.fill_(0)
 +
 +        # Make sure pool + block-lookup tensors exist and cover num_blocks.
-+        self._ensure_pool(kv_cache.device, num_blocks_hint=kv_cache.shape[0])
++        self._ensure_pool(device, num_blocks_hint=kv_cache.shape[0])
 +        # Cache the kv_cache ref so the metadata builder can drive flushes
 +        # into this layer's int4 cache (outside the captured region).
 +        self._kv_cache_ref = kv_cache
@@ -2567,6 +2620,8 @@ index 0000000..a7bd4cb
 +    def _flash_varlen(
 +        self, q, k, v, cu_q, cu_k, max_q, max_k, causal=True,
 +    ) -> torch.Tensor:
++        if not _HAS_FLASH_ATTN:
++            return _sdpa_varlen(q, k, v, cu_q, cu_k, self.scale, causal)
 +        if self.fa_version is None:
 +            return flash_attn_varlen_func(
 +                q=q, k=k, v=v, cu_seqlens_q=cu_q, cu_seqlens_k=cu_k,
@@ -2589,7 +2644,7 @@ index 0000000..a7bd4cb
 +        # FlashAttention caps head_dim at 256; the head_dim-512 global layers of
 +        # Gemma-4 must use the SDPA path (handles arbitrary head_dim). Prefill is
 +        # a one-time cost (decode dominates at long context), so SDPA here is fine.
-+        if _HAS_FLASH_ATTN and self.head_size <= 256:
++        if self.head_size <= 256:
 +            return self._flash_varlen(
 +                q, k, v,
 +                cu_q=attn_metadata.query_start_loc,
@@ -2747,17 +2802,10 @@ index 0000000..a7bd4cb
 +            K_full, V_full = self._gather_request_kv(
 +                kv_cache, attn_metadata.block_table[r], seq_len,
 +            )
-+            q_r = q[q_start:q_end].transpose(0, 1).unsqueeze(0).float()
-+            K_t = K_full.transpose(0, 1).unsqueeze(0).float()
-+            V_t = V_full.transpose(0, 1).unsqueeze(0).float()
-+            cached_len = seq_len - (q_end - q_start)
-+            q_pos = torch.arange(q_end - q_start, device=q.device).unsqueeze(1) + cached_len
-+            k_pos = torch.arange(seq_len, device=q.device).unsqueeze(0)
-+            mask = k_pos <= q_pos
-+            o = F.scaled_dot_product_attention(
-+                q_r, K_t, V_t, attn_mask=mask, scale=self.scale,
-+                enable_gqa=self.num_kv_heads < self.num_heads,
-+            )
++            q_r = q[q_start:q_end].transpose(0, 1).unsqueeze(0)
++            K_t = K_full.transpose(0, 1).unsqueeze(0).to(q.dtype)
++            V_t = V_full.transpose(0, 1).unsqueeze(0).to(q.dtype)
++            o = _sdpa_causal(q_r, K_t, V_t, self.scale, True)
 +            out[q_start:q_end] = o[0].transpose(0, 1).to(q.dtype)
 +        return out
 +
@@ -2875,8 +2923,7 @@ index 0000000..a7bd4cb
 +                >= int(os.environ.get("KVARN_FUSED_VERIFY_MIN_BLOCKS", "64"))
 +                and B > 0):
 +            return self._fused_verify_path(q, kv_cache, md)
-+        if (not _HAS_FLASH_ATTN or self.head_size > 256
-+                or self._fa_K_buf is None):
++        if self.head_size > 256 or self._fa_K_buf is None:
 +            return self._decode_path_slow(q, kv_cache, md)
 +
 +        seq_lens = md.seq_lens[:B].to(torch.int32)

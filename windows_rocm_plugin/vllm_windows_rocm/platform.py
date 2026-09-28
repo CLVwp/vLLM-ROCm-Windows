@@ -15,6 +15,43 @@ import torch
 from vllm.platforms.rocm import RocmPlatform
 
 
+def _clamp_kvarn_max_num_seqs(vllm_config, cache_dtype: str) -> None:
+    """Cap scheduler concurrency to what the KVarN fp16 tail-pool budget supports.
+
+    The pool holds 2*max_num_seqs + ceil(max_num_batched_tokens/group) + 8 fp16 slots per
+    attention layer, so vLLM's default max_num_seqs=256 alone reserves GiBs on a 7B model
+    (issue #26). KVarNAttentionImpl.forward charges the pool to the memory profile, so an
+    oversized pool now fails at startup ("not enough KV cache memory") instead of OOM-ing
+    mid-run; clamping keeps the default configuration bootable. KVARN_POOL_MEM_FRAC (fraction
+    of total GPU memory, default 0.08) sets the budget; an explicit lower --max-num-seqs wins.
+    """
+    from vllm.model_executor.layers.quantization.kvarn.config import KVarNConfig
+
+    mc, pc, sc = vllm_config.model_config, vllm_config.parallel_config, vllm_config.scheduler_config
+    bt = sc.max_num_batched_tokens
+    if not isinstance(bt, int) or bt <= 0:
+        print("vllm-win kvarn: max_num_batched_tokens not resolved yet; pool budget clamp skipped")
+        return
+    cfg = KVarNConfig.from_cache_dtype(cache_dtype, mc.get_head_size())
+    num_kv_heads = mc.get_num_kv_heads(pc)
+    num_layers = KVarNConfig.num_kvarn_layers(mc, pc)
+    total = torch.cuda.get_device_properties(0).total_memory
+    frac = float(os.environ.get("KVARN_POOL_MEM_FRAC", KVarNConfig.POOL_MEM_FRAC_DEFAULT))
+    cap = cfg.max_supported_seqs(total, num_kv_heads, num_layers, bt, frac=frac)
+    before = sc.max_num_seqs
+    if before > cap:
+        sc.max_num_seqs = cap
+    pool = cfg.pool_bytes(sc.max_num_seqs, bt, num_kv_heads, num_layers)
+    budget = frac * total
+    print(f"vllm-win kvarn: fp16 tail pool {pool / 2**30:.2f} GiB "
+          f"(max_num_seqs {before} -> {sc.max_num_seqs}, max_num_batched_tokens {bt}, "
+          f"{num_layers} layers x {num_kv_heads} kv heads; budget {frac:.2f} x {total / 2**30:.1f} GiB)")
+    if pool > budget:
+        print("vllm-win kvarn: WARNING the pool exceeds its budget even at the minimum concurrency; "
+              "lower --max-num-batched-tokens (every 128-token block of a prefill chunk costs one "
+              "slot per layer) or raise KVARN_POOL_MEM_FRAC")
+
+
 class WindowsRocmPlatform(RocmPlatform):
     @classmethod
     def get_device_name(cls, device_id: int = 0) -> str:
@@ -67,6 +104,7 @@ class WindowsRocmPlatform(RocmPlatform):
                         cc.kv_cache_dtype_skip_layers = skip
                     print("vllm-win kvarn: skip_layers ->", cc.kv_cache_dtype_skip_layers,
                           "| cc id", id(cc))
+                _clamp_kvarn_max_num_seqs(vllm_config, kvd)
                 # Per-layer backend selection: prepend KVARN to the dense ROCm priorities so
                 # kvarn-dtype attention groups pick it (gated by its supports_kv_cache_dtype);
                 # the fp16/bf16 (sliding-window) groups fall through to the normal backend.
@@ -88,6 +126,12 @@ class WindowsRocmPlatform(RocmPlatform):
                     _rocm._get_backend_priorities = _prio
         except Exception as e:  # noqa: BLE001
             print("vllm-win kvarn config warning:", repr(e))
+        # Opt-in bisect switch (VLLM_WIN_ATTN_2D_DECODE=1): TRITON_ATTN decode via the 2D kernel.
+        try:
+            from . import cops
+            cops.maybe_patch_attn_2d_decode()
+        except Exception as e:  # noqa: BLE001
+            print("vllm-win 2D-decode patch warning:", repr(e))
         # Register the fast M=1 AWQ-uint4 GEMV ahead of conch. Done here (engine config setup)
         # rather than at import/bootstrap: vllm + the platform plugin are fully loaded by now,
         # so importing vllm.model_executor.kernels.linear won't circular-import this package.

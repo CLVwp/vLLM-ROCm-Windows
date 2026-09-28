@@ -16,8 +16,10 @@ Windows (see `windows-serve-windows.patch` below). The manual flow remains as fa
 ```
 git -C vllm apply --ignore-whitespace ../patches/vllm/conch-group-size.patch
 git -C vllm apply --ignore-whitespace ../patches/vllm/gemma4-moe-weightload.patch
+git -C vllm apply --ignore-whitespace ../patches/vllm/hf-fs-windows-path.patch
 git -C vllm apply --ignore-whitespace ../patches/vllm/kvarn.patch
 git -C vllm apply --ignore-whitespace ../patches/vllm/native-attn-sliding-window.patch
+git -C vllm apply --ignore-whitespace ../patches/vllm/native-cache-ops.patch
 git -C vllm apply --ignore-whitespace ../patches/vllm/windows-serve-windows.patch
 ```
 
@@ -56,6 +58,16 @@ Contents (one self-contained patch; new files + integration edits):
   first-run; (2) diagnostic env gates left inert-by-default in `kvarn_attn.py`
   (`KVARN_FORCE_SLOW` = dequant+SDPA reference path, `KVARN_NO_HADAMARD`, `KVARN_GTRACK`,
   `KVARN_RECON_DEBUG`, `KVARN_FAST_FLUSH=0` = legacy per-tile flush).
+  Two further edits for this port (issue #26): (3) the fp16 tail pool, rotation scratch and
+  decode buffers are allocated during vLLM's memory-profiling pass (`forward` with
+  `attn_metadata=None`), so `gpu_memory_utilization` accounts for them instead of them landing
+  on top of a KV cache that already took the remaining memory; the plugin's
+  `check_and_update_config` caps `max_num_seqs` to what the pool budget (`KVARN_POOL_MEM_FRAC`,
+  default 0.08 of GPU memory) supports. (4) `flash_attn_varlen_func` (absent on Windows) is
+  replaced by an SDPA stand-in using torch's `causal_lower_right` bias, which reaches the
+  aotriton flash kernel with GQA; the previous fallback ran chunked-prefill continuations
+  through fp32 SDPA with a boolean mask, i.e. the math kernel (+4.9 GiB per layer at
+  2048x8192 on 32 heads), which is what made 8k prefills spill and crawl.
 - **Integration edits** to vLLM: register the KVARN backend (`registry.py`); add the 4 kvarn presets
   to `CacheDType` (`config/cache.py`) and `STR_DTYPE_TO_TORCH_DTYPE` (`utils/torch_utils.py`); graft
   `TQFullAttentionSpec` (tile-quant full-attn spec with `tq_slot_size` byte sizing) into
@@ -73,6 +85,15 @@ blocks were read back as uninitialised int4 (garbled decode). It is included in 
 Status: correct end-to-end on gemma-4-26B (compressed-tensors W4A16 MoE); ~40 tok/s decode with
 cudagraph (global-only) / real 4.4x KV-capacity win with `KVARN_QUANT_SLIDING=1` but slower pending a
 builder D2H-sync refactor. Sliding-window semantics enforced by the decode kernel (`impl.sliding_window`).
+
+## native-cache-ops.patch
+`v1/attention/backends/triton_attn.py` `do_kv_cache_update`: prefers the native HIP
+`torch.ops._C_cache_ops.reshape_and_cache_flash` (built 1:1 from `csrc/cache_kernels.cu` by
+`experiments/vllm_c_ext/build_cache_c.py` into `vllm_win_cache_C.pyd`, loaded by the plugin) over the
+Triton kernel for the per-token KV write: one HIP launch instead of a Triton launch per layer per
+step. Falls back to the Triton kernel when the extension is not loaded, and always for fp8 caches:
+the Windows build of the extension has no `ENABLE_FP8`, so its fp8 `scaled_convert` is a stub
+(`assert(false)`, or zeros under NDEBUG) while the Triton kernel quantizes correctly.
 
 ## native-attn-sliding-window.patch
 `csrc/attention/{attention_kernels.cuh, paged_attention_v1.cu}` + `csrc/ops.h`: threads a new

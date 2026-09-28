@@ -62,16 +62,25 @@ greedy): ~73 tok/s at batch 4, ~232 at batch 16, ~358 at batch 32.
 
 **KVarN (experimental / WIP).** `--kv-cache-dtype kvarn_k4v2_g128 --block-size 128` runs end-to-end on
 gfx1100 (K 4-bit / V 2-bit, calibration-free). On Qwen2.5-7B, vLLM sizes **999,296 KV tokens vs 210,784
-in fp16 — 4.74x capacity** — and generation stays coherent, at 74.7 tok/s (~35% slower than the fp16
-115: KVarN is a KV-*capacity* feature, not a speed one). Two rough edges remain (hence WIP): (1) vLLM
-sizes the KV pool to fill the budget, so cap it with `num_gpu_blocks_override` (else it tries to allocate
-all ~1M tokens at once and spills); (2) KVarN's per-forward workspace over-allocates ~5 GiB (Sinkhorn /
-rotation / D2H staging, not counted by `gpu_memory_utilization`), so today it only fits models that leave
-that headroom (7-9B) — a 14GB-weight model like ERNIE has no room. The pending builder memory refactor
-would remove both.
+in fp16, 4.74x capacity**, generation stays coherent at 74.7 tok/s (~35% slower than the fp16 115: KVarN is
+a KV-*capacity* feature, not a speed one), and an 8k prompt prefills in 2.9 s (`max_num_batched_tokens`
+2048) or 2.4 s (8192). Memory accounting: the fp16 tail pool (`2*max_num_seqs + ceil(max_num_batched_tokens/128)
++ 8` slots per attention layer) is allocated during vLLM's memory profiling, so `gpu_memory_utilization`
+covers it, and the plugin caps `max_num_seqs` to what the pool budget supports (`KVARN_POOL_MEM_FRAC`,
+default 8% of GPU memory; the clamp and the pool size are printed at startup). Chunked-prefill
+continuations use an SDPA stand-in for `flash_attn_varlen` (torch's `causal_lower_right` bias reaches the
+aotriton flash kernel), where the previous fallback materialized fp32 score matrices and spilled. Keep
+`gpu_memory_utilization` at 0.8 or `--max-num-seqs` small with KVarN: cudagraph capture runs after the KV
+cache has been sized, and on Windows going past VRAM spills to shared memory instead of failing. Models
+whose weights leave little headroom (ERNIE, 14 GB) are untested with the new accounting.
 
-Decode is still below the card's ~800 GB/s memory-bandwidth roofline; per-shape GEMV tuning,
-fp8-KV scale calibration, and porting the rest of the `csrc` kernels are ongoing.
+**fp8 KV cache** (`--kv-cache-dtype fp8`) is not usable on Qwen2.5 here: per-tensor e4m3 cannot hold
+Qwen's K outlier channels, so the attention output is ~15% off in every layer and generation is garbled
+from the first tokens (the Triton store and load kernels were verified bit-exact; the error is the
+quantization itself, and per-tensor scales do not help). Details in issue #25. Use KVarN for long context.
+
+Decode is still below the card's ~800 GB/s memory-bandwidth roofline; per-shape GEMV tuning and porting
+the rest of the `csrc` kernels are ongoing.
 
 ### Not done
 
