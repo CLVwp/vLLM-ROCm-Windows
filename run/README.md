@@ -1,57 +1,51 @@
-# Phase 1 — vLLM first token on native Windows + ROCm (gfx1100)
+# run/ — bench & tooling drivers (native Windows + ROCm)
 
-**Status: PASSED (2026-06-30)** on AMD Radeon RX 7900 XT (gfx1100), Windows 11 — believed world-first.
+**Run everything from THIS directory** (not the repo root): the cloned `vllm/` directory at the
+root would shadow the installed `vllm` package as a namespace package otherwise.
 
-```
-PROMPT: 'Hello, my name is'
-OUTPUT: ' J.C. and I am a student at the University of California, Berkeley'
-```
-OPT-125m, eager mode, `TRITON_ATTN`, single GPU, no custom kernels. KV cache 274,320 tokens / 9.42 GiB.
+Install and first-run instructions live in [`../SETUP.md`](../SETUP.md); feature documentation
+(KVarN, fp8 KV cache, CK FMHA prefill, native kernels) in the [root README](../README.md).
 
-## How it's wired
+Historical milestone: first token **PASSED 2026-06-30** on RX 7900 XT (gfx1100) — believed
+world-first for vLLM on native Windows + ROCm (OPT-125m, eager, `TRITON_ATTN`).
 
-1. **vLLM source** — `../vllm` is vLLM **v0.19.1** (pins torch 2.10.0 + torchvision 0.25.0, matching the installed ROCm stack; v0.20+ wants torch 2.11). Installed editable with **no kernels**:
-   ```bash
-   cd ../vllm
-   python use_existing_torch.py                     # strip torch pins so pip won't replace the ROCm build
-   VLLM_TARGET_DEVICE=empty pip install -e . --no-build-isolation
-   ```
-2. **Out-of-tree plugin** — `../windows_rocm_plugin` (`pip install -e .`). Provides:
-   - `WindowsRocmPlatform` (registered via the `vllm.platform_plugins` entry point) — overrides the amdsmi-based device methods to use `torch.cuda`.
-   - `torchdist_shim` — a **single-process `torch.distributed`** (this torch is built USE_DISTRIBUTED=0) plus Windows stubs for `amdsmi`, `uvloop`, `fcntl`, and `torch._C._distributed_c10d`.
-3. **One-line vendored patch** — `../vllm/vllm/__init__.py` imports `vllm_windows_rocm.bootstrap` (applies the shim before any vllm submodule loads torch.distributed).
-4. **Extra deps** — `pip install llguidance xgrammar` (structured-output backends; Windows wheels exist).
+## Scripts
 
-## Running
+| script | what it does |
+|---|---|
+| `first_token.py` | smallest end-to-end smoke test (OPT-125m) |
+| `bench.py` | decode tok/s + VRAM (`VLLM_BENCH_COMPILE`, `VLLM_BENCH_CGMODE`, `VLLM_BENCH_MODEL`, …) |
+| `batch_sweep.py` | aggregate throughput vs concurrency |
+| `precision_check.py` | generation-quality sanity across configs |
+| `profile_decode.py` | decode profiling |
+| `test_compile.py` | torch.compile / inductor smoke test |
+| `chat_ui.py` | dependency-free browser chat on top of `vllm serve` — or just `localserve.ps1` at the repo root |
+| `kv_bench.py` | KV-cache dtype bench: prefill/decode speed and output drift vs fp16 across context lengths (`VLLM_KV_*` env vars, see the file docstring) |
+| `kv_scale_probe.py` | per-layer amplitudes, per-channel max\|K\| map, one-layer q/k/v dump, and fp8 KV offset/scale calibration (`VLLM_KV_PROBE_*`) |
+| `kv_quant_schemes.py` | offline KV quantization-format comparison on a probe dump |
+| `kv_pc_kernel_check.py` | direct bit-exact check of the fp8 per-channel-scale Triton kernels |
+| `s5_bench/` | micro-benchmarks (flash/moe/sliding kernels, perf ablations), see `s5_bench/README.md` |
+
+## The fp8 KV workflow on Qwen2.5 (issue #28)
+
+fp8 KV with default scales garbles Qwen2.5 output (K carries a large per-channel offset). The
+fix is a two-step calibration, both steps from `run/` with `HIP_VISIBLE_DEVICES` set if your
+box has an iGPU:
 
 ```bash
-# IMPORTANT: run from this run/ dir (NOT the project root), else the vllm/ clone dir
-# shadows the installed vllm package as a namespace package.
-python first_token.py
+# 1. calibrate once: writes offsets + per-layer + per-channel scales
+VLLM_KV_CTXS=128,2048,8192 VLLM_KV_PROBE_MEAN=kv_offsets.pt python kv_scale_probe.py
+
+# 2. run any fp8 workload with the offsets file
+VLLM_KV_DTYPE=fp8 VLLM_WIN_KV_OFFSETS=kv_offsets.pt python kv_bench.py
 ```
 
-## Local browser chat
+Design, measurements and results: [`../kv-fp8-audit.md`](../kv-fp8-audit.md).
 
-With the vLLM server running on `http://127.0.0.1:8000`, start the dependency-free browser
-UI from the repository root in a second terminal:
+## Engine notes
 
-```powershell
-C:\AI\vllm-venv\Scripts\python .\run\chat_ui.py
-```
-
-Open `http://localhost:8080`. The UI proxies model discovery and chat completion requests to
-vLLM, so no CORS configuration or additional package is needed. Keep both terminals open.
-
-Key runtime config (see `first_token.py`): `enforce_eager=True`, `attention_backend="TRITON_ATTN"`
-(uses Triton reshape_and_cache + attention, avoiding the missing `_rocm_C`/`_C_cache_ops` kernels;
-ROCM_ATTN is the default but needs C kernels), `tensor_parallel_size=1`, and env
-`VLLM_ROCM_USE_SKINNY_GEMM=0` (→ `torch.nn.functional.linear` instead of `_rocm_C.wvSplitK`),
-`VLLM_ROCM_USE_AITER=0`, `VLLM_ENABLE_V1_MULTIPROCESSING=0`.
-
-> NOTE: in v0.19.1 the `VLLM_ATTENTION_BACKEND` env var is gone — use the `attention_backend=` kwarg.
-
-## What this proves / what's next
-Proves the **full vLLM engine** (scheduler, KV-cache, paged attention via Triton, model runner,
-sampler) runs on native Windows + ROCm gfx1100 in eager mode. This is correctness, not speed
-(~4–5 tok/s on a tiny model in eager). Phase 2 = real paged-attention performance (Triton tuning /
-hand-written WMMA kernels — proven feasible in `../experiments/`), then W4A16 quant, then KVarN.
+- In-process engine only: `VLLM_ENABLE_V1_MULTIPROCESSING=0` (set by every script before
+  importing vllm) — the plugin's config-time hooks need it.
+- `VLLM_ATTENTION_BACKEND` is gone in this vLLM version — use the `attention_backend=` kwarg.
+- vLLM pin: the **v0.19.1** tag (== commit `b1388b1`, reported by pip as `0.19.2.dev0`), which
+  pins torch 2.10.

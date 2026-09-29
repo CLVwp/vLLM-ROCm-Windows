@@ -32,3 +32,6 @@ build_c_ext.log
 
 # internal working notes, no longer tracked
 docs/
+
+# calibration/dump artifacts (regenerate with run/kv_scale_probe.py, see kv-fp8-audit.md)
+run/*.pt
