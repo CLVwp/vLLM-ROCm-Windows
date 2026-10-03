@@ -69,11 +69,13 @@ The first two installs download about 5 GB. Go grab a coffee.
 **Check the GPU**:
 
 ```powershell
-C:\AI\vllm-venv\Scripts\python -c "import torch; print(torch.__version__); print(torch.cuda.get_device_name(1))"
+C:\AI\vllm-venv\Scripts\python -c "import torch; print(torch.__version__); [print(i, torch.cuda.get_device_name(i)) for i in range(torch.cuda.device_count())]"
 ```
 
-Expected: a `2.10.0+rocm...` version, then your card's name. On `RuntimeError`: check the
-pip index (`gfx110X-all`) and your driver.
+Expected: a `2.10.0+rocm...` version, then one line per GPU. Note the index of your discrete
+card: if your CPU has an integrated GPU (most Ryzen 7000/9000 desktop CPUs and APUs), the iGPU
+is usually device 0 and the discrete card device 1; with a single GPU the card is device 0.
+On `RuntimeError`: check the pip index (`gfx110X-all`) and your driver.
 
 ## Step 4 - The repo, then everything is automated (5 min)
 
@@ -117,7 +119,8 @@ throughput (without it, decode speed collapses; see gfx1101-validation.md).
 
 ```powershell
 cd ..\..\run
-$env:HIP_VISIBLE_DEVICES="1"; $env:ROCM_HOME="C:\AI\vllm-venv\Lib\site-packages\_rocm_sdk_devel"
+$env:HIP_VISIBLE_DEVICES="1"   # the discrete card's index from Step 3; skip this line with a single GPU
+$env:ROCM_HOME="C:\AI\vllm-venv\Lib\site-packages\_rocm_sdk_devel"
 $env:TMP="C:\AI\tmp"; $env:TEMP="C:\AI\tmp"
 & C:\AI\vllm-venv\Scripts\python.exe first_token.py
 ```

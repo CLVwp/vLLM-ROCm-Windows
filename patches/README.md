@@ -10,10 +10,12 @@ Clone base when these were generated: vLLM `b1388b1` — this IS the `v0.19.1` t
 as `0.19.2.dev0+gb1388b1fb`, a post-tag dev version string).
 
 **These patches are applied automatically** by `python tools/patch_vllm.py vllm` (the same
-step that installs the bootstrap import and the venv `sitecustomize.py`): applied patches are
-recorded in `vllm/.winrocm_patches_applied` and skipped on re-runs, so the command is safe to
-re-run, and it is the required step for `vllm serve` to work on Windows (see
-`windows-serve-windows.patch` below). The tool also warns when the clone is not at the
+step that installs the bootstrap import and `sitecustomize.py`): it reads the tree to see which
+patches are already there, so it is safe to re-run, and after a partial reset of the clone it
+puts back exactly what is missing, down to single files of a multi-file patch. A patch whose
+context a later patch rewrote (`native-cache-ops.patch` under `triton-attn-pc-scale.patch`) is
+verified on a scratch copy with the later patch reversed. It is the required step for
+`vllm serve` to work on Windows (see `windows-serve-windows.patch` below). The tool also warns when the clone is not at the
 expected base commit (see below). Patches apply in **alphabetical filename
 order** — when a patch depends on another one being applied first, name it so it sorts after
 (e.g. `triton-attn-pc-scale.patch` builds on `native-cache-ops.patch`'s if/else store dispatch,
@@ -50,6 +52,12 @@ quant suffix (`gate_proj_packed`/`_scale`), which never matched `expert_params_m
 `_packed`/`_scale` to the canonical dotted `.weight_packed`/`.weight_scale` so compressed-tensors
 fused-expert MoE checkpoints load 1:1 with the Linux behavior. Regression-safe: bare/`.weight`
 (unquantized) names are untouched.
+
+## hf-fs-windows-path.patch
+`model_executor/model_loader/weight_utils.py` (from PR #18): `HfFileSystem` paths are POSIX-style
+repo paths, but `os.path.join` uses the OS separator, so on Windows the file-list lookup asked for
+`Qwen/Qwen2.5-...Int4\` and failed with "Invalid HF URI", falling back to one request per
+pattern. The repo path is now joined with a forward slash.
 
 ## kvarn.patch
 Port of Huawei **KVarN** (calibration-free KV-cache quant: Hadamard rotation + Sinkhorn

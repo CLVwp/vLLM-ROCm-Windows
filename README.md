@@ -326,6 +326,10 @@ set HF_HUB_OFFLINE=1
 - `run/` - bench / KV-cache tooling / profiling / batch-sweep drivers
 - `experiments/` - native `csrc` kernel build harness and standalone HIP/Triton kernel proofs
 
+## Contributing
+
+Issues and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
 Apache-2.0, matching vLLM. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

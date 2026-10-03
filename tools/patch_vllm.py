@@ -7,20 +7,21 @@ torch.distributed. Idempotent.
 Also applies the repo's vLLM source patches (patches/vllm/*.patch) to the checkout when
 git is available, so a fresh clone reaches the documented behaviour without manual
 `git -C vllm apply` steps. Patching is skipped (with a notice) when the checkout is not
-a git work tree; already-applied patches are detected and skipped, making re-runs safe.
+a git work tree. Already-applied patches are detected from the tree itself, so re-runs are
+safe and a partially reset clone gets exactly the missing patches back.
 
 Usage: python tools/patch_vllm.py [path-to-vllm-checkout]   (default: ./vllm)
 """
+import os
+import shutil
 import subprocess
 import sys
-import os
+import tempfile
 
 MARK = "vllm_windows_rocm.bootstrap"
 # The patches were generated against this commit (the v0.19.1 tag); see patches/README.md.
 # A clone at any other commit may make them fail or apply with shifted context.
 EXPECTED_VLLM_BASE = "b1388b1"
-# Marker file created inside the vllm clone to record which patches have been applied.
-MARKER_NAME = ".winrocm_patches_applied"
 BLOCK = (
     "\n# --- vLLM-on-Windows-ROCm: install the single-process torch.distributed shim and\n"
     "# _C op fallbacks before any vllm submodule that imports torch.distributed is loaded.\n"
@@ -45,9 +46,100 @@ def _git_apply(vllm_root: str, patch_path: str, *extra: str) -> subprocess.Compl
     )
 
 
-def _patch_already_applied(vllm_root: str, patch_path: str) -> bool:
+def _patch_already_applied(vllm_root: str, patch_path: str, *extra: str) -> bool:
     """True when reverse-applying cleanly succeeds, i.e. the patch is already in the tree."""
-    return _git_apply(vllm_root, patch_path, "--check", "-R").returncode == 0
+    return _git_apply(vllm_root, patch_path, *extra, "--check", "-R").returncode == 0
+
+
+def _touched_files(patch_path: str) -> list[str]:
+    """Repo-relative paths a patch modifies, creates or deletes, in patch order."""
+    files: list[str] = []
+    with open(patch_path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if line.startswith(("--- a/", "+++ b/")):
+                rel = line[6:].rstrip("\r\n").split("\t")[0]
+                if rel not in files:
+                    files.append(rel)
+    return files
+
+
+def _only(rel: str) -> str:
+    """git apply argument limiting a patch to one file (glob characters escaped)."""
+    return "--include=" + "".join("\\" + c if c in "*?[]\\" else c for c in rel)
+
+
+def _applied_under_later(vllm_root: str, patch_dir: str, names: list[str], i: int,
+                         rel: str) -> str | None:
+    """The later patch that rewrote patch i's context in file `rel`, when patch i is applied
+    underneath it there; None otherwise.
+
+    Reverse detection cannot see patch i once a later patch changed lines inside its context
+    (triton-attn-pc-scale over native-cache-ops). Verify it the way it was applied: copy the
+    file to a scratch dir, reverse there the later patches applied to it (last first), then
+    reverse-check patch i. `git apply` cannot chain several patches to one file in a single
+    call, hence the copy; nothing in the clone is modified."""
+    later = [n for n in names[i + 1:] if rel in _touched_files(os.path.join(patch_dir, n))]
+    src = os.path.join(vllm_root, rel)
+    if not later or not os.path.isfile(src):
+        return None
+    tmp = tempfile.mkdtemp(prefix="vw_patchcheck_")
+    try:
+        dst = os.path.join(tmp, rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copyfile(src, dst)
+        # Outside a repository `git apply` patches files relative to cwd; the ceiling stops git
+        # from discovering a repository above the scratch dir.
+        env = dict(os.environ, GIT_CEILING_DIRECTORIES=os.path.dirname(tmp))
+
+        def reverse(name: str, *extra: str) -> bool:
+            return subprocess.run(
+                ["git", "apply", "--ignore-whitespace", "--whitespace=nowarn", "-R", _only(rel),
+                 *extra, os.path.join(patch_dir, name)],
+                cwd=tmp, env=env, capture_output=True,
+            ).returncode == 0
+
+        undone = [n for n in reversed(later) if reverse(n, "--check") and reverse(n)]
+        return undone[-1] if undone and reverse(names[i], "--check") else None
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _apply_one(vllm_root: str, patch_dir: str, names: list[str], i: int) -> tuple[str, list[str]]:
+    """Bring patch i into the tree. Returns (status line, error lines)."""
+    name = names[i]
+    p = os.path.join(patch_dir, name)
+    if _patch_already_applied(vllm_root, p):
+        return f"already applied: {name}", []
+    r = _git_apply(vllm_root, p)
+    if r.returncode == 0:
+        return f"applied: {name}", []
+    # Neither in the tree nor applicable as a whole. git apply is all-or-nothing per patch, so
+    # a clone where only some of the patch's files were reset lands here, as does a patch whose
+    # context a later patch rewrote. Decide file by file.
+    applied, already, rewritten, errors = [], [], [], []
+    for rel in _touched_files(p):
+        if _patch_already_applied(vllm_root, p, _only(rel)):
+            already.append(rel)
+            continue
+        rf = _git_apply(vllm_root, p, _only(rel))
+        if rf.returncode == 0:
+            applied.append(rel)
+            continue
+        over = _applied_under_later(vllm_root, patch_dir, names, i, rel)
+        if over:
+            rewritten.append(over)
+            continue
+        errors.append(rf.stderr.strip() or f"{rel}: patch does not apply")
+    if errors:
+        return f"FAILED to apply {name}", errors
+    if applied:
+        total = len(applied) + len(already) + len(rewritten)
+        return (f"applied: {name} (to {len(applied)} of its {total} files; "
+                "the others already had it)"), []
+    if rewritten:
+        return (f"already applied: {name} (part of its context was since rewritten by "
+                f"{', '.join(sorted(set(rewritten)))})"), []
+    return f"already applied: {name}", []
 
 
 def apply_source_patches(vllm_root: str) -> int:
@@ -63,49 +155,31 @@ def apply_source_patches(vllm_root: str) -> int:
     )
     if probe.returncode != 0:
         print(f"notice: {vllm_root} is not a git work tree; skipping "
-              f"{len(patches)} source patch(es) — apply them manually per patches/README.md")
+              f"{len(patches)} source patch(es), apply them manually per patches/README.md")
         return 0
     head = subprocess.run(
         ["git", "-C", vllm_root, "rev-parse", "HEAD"], capture_output=True, text=True
     )
     if head.returncode == 0 and not head.stdout.strip().startswith(EXPECTED_VLLM_BASE):
         print(f"WARNING: vllm checkout is at {head.stdout.strip()[:12]}, but the patches were "
-              f"generated against {EXPECTED_VLLM_BASE} (tag v0.19.1). Continuing — patches that "
+              f"generated against {EXPECTED_VLLM_BASE} (tag v0.19.1). Continuing; patches that "
               "no longer apply cleanly will be reported below. See patches/README.md.")
-    # Applied-patch bookkeeping lives in a marker file inside the clone: reverse-apply
-    # detection alone cannot tell "already applied" from "broken" once a later patch
-    # overlaps an earlier one's context (e.g. triton-attn-pc-scale over native-cache-ops).
-    marker_path = os.path.join(vllm_root, MARKER_NAME)
-    try:
-        with open(marker_path, encoding="utf-8") as f:
-            done = set(f.read().split())
-    except OSError:
-        done = set()
+    # Detection reads the tree, not a record of past runs: a record goes stale as soon as the
+    # clone is reset (`git checkout .` keeps untracked files) and would then skip patches that
+    # are no longer there.
     failures = 0
-    for name in patches:
-        if name in done:
-            print(f"already applied: {name}")
-            continue
-        p = os.path.join(patch_dir, name)
-        r = _git_apply(vllm_root, p)
-        if r.returncode == 0:
-            print(f"applied: {name}")
-            done.add(name)
-            continue
-        if _patch_already_applied(vllm_root, p):
-            print(f"already applied: {name}")
-            done.add(name)
+    for i, name in enumerate(patches):
+        status, errors = _apply_one(vllm_root, patch_dir, patches, i)
+        if not errors:
+            print(status, flush=True)
             continue
         failures += 1
-        print(f"FAILED to apply {name}: {r.stderr.strip()}", file=sys.stderr)
-        print(f"notice: if {name} was applied by hand on this tree (a later patch overlaps its "
-              f"context, so detection fails), add its filename to {vllm_root}/{MARKER_NAME} "
-              "and re-run. On a fresh clone this branch never triggers.", file=sys.stderr)
-    try:
-        with open(marker_path, "w", encoding="utf-8", newline="\n") as f:
-            f.write("\n".join(sorted(done & set(patches))) + "\n")
-    except OSError as e:
-        print(f"notice: could not write {marker_path} ({e}); re-runs will re-detect", file=sys.stderr)
+        print(status, file=sys.stderr, flush=True)
+        for e in errors:
+            print("  " + e.replace("\n", "\n  "), file=sys.stderr, flush=True)
+        print(f"notice: {name} is neither in the tree nor applicable to it: the files above have "
+              f"local edits, or the clone is not at {EXPECTED_VLLM_BASE}. See patches/README.md.",
+              file=sys.stderr, flush=True)
     return 1 if failures else 0
 
 
