@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CLVwp. Apache-2.0 (see LICENSE).
+# Pinned stack for RDNA3 on native Windows (SETUP.md step 3).
+# torch: AMD "TheRock" Windows wheels for the gfx110X family (rocm.nightlies.amd.com);
+# everything else resolves from PyPI. Install: pip install -r requirements-win-rocm.txt
+--extra-index-url https://rocm.nightlies.amd.com/v2/gfx110X-all/
+torch==2.10.0+rocm7.13.0a20260508
+rocm[libraries,devel]
+triton-windows<3.7
+xgrammar==0.2.8
+conch-triton-kernels
+llguidance
+huggingface_hub

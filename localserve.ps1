@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Serve a local model on an AMD GPU (ROCm) + browser chat UI, one command.
-# Usage: powershell -ExecutionPolicy Bypass -File localserve.ps1 [-Model "Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4"] [-Port 8000]
+# Usage: powershell -ExecutionPolicy Bypass -File localserve.ps1 [-Model "Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4"] [-Port 8000] [-MemUtil 0.6] [-NoUi]
 param(
     [string]$Model = "Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4",
     [int]$Port = 8000,
-    [string]$Venv = "C:\AI\vllm-venv"
+    [string]$Venv = "C:\AI\vllm-venv",
+    [double]$MemUtil = 0.6,
+    [switch]$NoUi
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,7 +50,7 @@ Write-Host "=== vLLM serve: $Model on port $Port (GPU device $($env:HIP_VISIBLE_
 $serve = Start-Process -FilePath "$Venv\Scripts\vllm.exe" -ArgumentList @(
     "serve", $Model, "--port", "$Port", "--dtype", "float16",
     "--enforce-eager", "--attention-backend", "TRITON_ATTN",
-    "--gpu-memory-utilization", "0.6"
+    "--gpu-memory-utilization", "$MemUtil"
 ) -NoNewWindow -PassThru
 
 # Wait for the server to answer (allow 10 min for the first load/download)
@@ -68,6 +70,14 @@ if (-not $up) {
     exit 1
 }
 Write-Host "Server up on http://127.0.0.1:$Port" -ForegroundColor Green
+
+# ===== Headless mode (infra usage: an OpenAI-compatible endpoint that just stays up) =====
+if ($NoUi) {
+    Write-Host "Headless mode: server stays up (Ctrl+C to stop)." -ForegroundColor Green
+    Wait-Process -Id $serve.Id
+    Write-Host "Server stopped." -ForegroundColor Yellow
+    exit 0
+}
 
 # ===== UI =====
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path

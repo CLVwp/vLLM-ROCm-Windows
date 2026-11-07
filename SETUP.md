@@ -47,6 +47,11 @@ python --version    # must print Python 3.12.x
 
 ## Step 3 - Create the Python environment (15 min, mostly downloads)
 
+> One-shot alternative: `powershell -ExecutionPolicy Bypass -File setup.ps1` (from the repo
+> root, after cloning vllm per step 4) automates steps 3 to 5: venv at `C:\AI\vllm-venv`,
+> pinned installs (`requirements-win-rocm.txt`), vLLM empty install + plugin + patches,
+> native kernels. Idempotent, safe to re-run.
+
 In PowerShell:
 
 ```powershell
@@ -148,6 +153,10 @@ powershell -ExecutionPolicy Bypass -File localserve.ps1
 The script: starts the vLLM server, waits until it is ready, serves the chat UI on
 http://127.0.0.1:8080, and stops the server cleanly when you close the UI.
 Ctrl+C to stop everything.
+
+Headless variant (API only, no UI): add `-NoUi`. The server starts, stays up, and Ctrl+C
+stops it. The script also takes `-Model`, `-Port`, `-MemUtil` (vLLM
+`--gpu-memory-utilization`) and `-Venv`.
 
 ---
 
