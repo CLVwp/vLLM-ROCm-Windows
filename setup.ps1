@@ -30,7 +30,12 @@ if (-not (Test-Path "$Venv\Scripts\python.exe")) {
     python -m venv $Venv
 }
 $py = "$Venv\Scripts\python.exe"
-& $py -m pip install -U pip setuptools wheel
+# pip/wheel: latest is fine. setuptools: held inside the range vLLM v0.19.1 declares
+# in its pyproject (>=77.0.3,<81.0.0 for python>3.11). A blanket -U upgrade drifts an
+# existing venv out of that range and pip's resolver then reports a permanent conflict;
+# a too-new setuptools also sits under every future cpp_extension/HIP kernel build.
+& $py -m pip install -U pip wheel
+& $py -m pip install "setuptools>=77.0.3,<81.0.0"
 
 # ===== 2. Pinned stack (requirements-win-rocm.txt, ~5 GB of downloads) =====
 Write-Host "=== Installing pinned torch ROCm + dependencies ===" -ForegroundColor Cyan

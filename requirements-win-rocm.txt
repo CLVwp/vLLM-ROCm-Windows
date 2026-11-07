@@ -6,6 +6,8 @@
 --extra-index-url https://rocm.nightlies.amd.com/v2/gfx110X-all/
 torch==2.10.0+rocm7.13.0a20260508
 rocm[libraries,devel]
+# vLLM v0.19.1 pyproject declares this range (python>3.11): do not drift past it
+setuptools>=77.0.3,<81.0.0
 triton-windows<3.7
 xgrammar==0.2.8
 conch-triton-kernels

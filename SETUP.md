@@ -60,7 +60,8 @@ mkdir C:\AI, C:\AI\tmp -Force
 
 # Isolated venv (do NOT use the system Python)
 python -m venv C:\AI\vllm-venv
-C:\AI\vllm-venv\Scripts\python -m pip install -U pip setuptools wheel
+C:\AI\vllm-venv\Scripts\python -m pip install -U pip wheel
+C:\AI\vllm-venv\Scripts\python -m pip install "setuptools>=77.0.3,<81.0.0"   # vLLM declares <81 for python>3.11
 
 # PyTorch with native Windows ROCm (AMD "TheRock" builds)
 C:\AI\vllm-venv\Scripts\pip install --index-url https://rocm.nightlies.amd.com/v2/gfx110X-all/ "torch==2.10.0+rocm7.13.0a20260508" "rocm[libraries,devel]"
